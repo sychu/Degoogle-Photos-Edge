@@ -1,6 +1,9 @@
 # Plan 0008: Import report structure + no-overwrite guarantee
 
 ## Warning require validation out of quota at the end of session. Review required!
+## After run few obserwations:
+1. imported report main page is ugly and do not match current raport style
+2. raport is not clear enough. Which files were matched and which files were skipped?
 
 ## Goals
 
