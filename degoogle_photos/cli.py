@@ -25,7 +25,7 @@ from .copy import (
 from .sniff import effective_media_name
 from .albums import create_album_symlinks
 from .logging_util import MigrationLog
-from .report import DedupReport
+from .report import DedupReport, ImportReport
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -230,7 +230,7 @@ def _run_import(args):
                   f"the source would match itself.")
             raise SystemExit(1)
 
-    report = DedupReport(output_root, dry_run, mode_label="Dedup-import")
+    report = ImportReport(output_root, dry_run)
     start = time.time()
 
     # Phase 0: hash existing (real) files in the output into an in-memory set.
@@ -329,8 +329,8 @@ def _run_import(args):
                 # Register the alias only on the success path — failed copies
                 # must not leave a dangling ImportedAlbums/ entry behind.
                 album_files[src.parent.name].append((dest, prefix_dt))
-                if date_source in ("parent_dir", "none"):
-                    report.add_attention(src, dest, date_source)
+                report.add_copied(dest, src, dt, date_source, src.parent.name,
+                                  False, metadata=extract_metadata(src, None))
                 copied += 1
                 run_md5_to_dest[md5] = dest
             except Exception as e:
@@ -373,7 +373,7 @@ def _run_import(args):
         print(f"Source: {src}")
     print(f"\nDate folders:     {output_root}")
     print(f"Imported albums:  {output_root / 'ImportedAlbums'}")
-    print(f"Report:           {report.report_dir} (see index.html + dated run files)")
+    print(f"Report:           {report_index} (this run: {report.run_dir.name}/index.html)")
     if report_index.exists():
         webbrowser.open(report_index.resolve().as_uri())
 

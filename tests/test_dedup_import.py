@@ -25,7 +25,7 @@ def make_args(source, output, dry_run=False):
 
 
 def copied_media_files(output: Path):
-    """Real (non-symlink) media files, excluding aliases/ and report/ subtrees."""
+    """Real (non-symlink) media files, excluding aliases/ and report*/ subtrees."""
     return [
         p for p in output.rglob("*")
         if p.is_file() and not p.is_symlink()
@@ -33,7 +33,19 @@ def copied_media_files(output: Path):
         and "Albums" not in p.parts
         and "by-folder" not in p.parts
         and "report" not in p.parts
+        and "report-dedup" not in p.parts
+        and "report-import" not in p.parts
     ]
+
+
+def import_run_html(output: Path) -> str:
+    """HTML of the latest import run page (report-import/import-*/index.html)."""
+    runs = sorted(
+        (d for d in (output / "report-import").iterdir() if d.is_dir()),
+        key=lambda d: d.name,
+    )
+    assert runs, "no import run directories written"
+    return (runs[-1] / "index.html").read_text(encoding="utf-8")
 
 
 def symlinks_in_imported_albums(output: Path):
@@ -64,7 +76,7 @@ def test_existing_content_is_skipped(tmp_path):
     assert not (out / "2020" / "05" / "IMG_20200510_120000_2.jpg").exists()
     assert not (out / "by-folder").exists()
 
-    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    html = import_run_html(out)
     assert "Already in Destination" in html
     assert "IMG_20200510_120000.jpg" in html
 
@@ -87,7 +99,7 @@ def test_dest_hit_with_stale_guess_creates_no_dangling_alias(tmp_path):
 
     _run_import(make_args(src, out))
 
-    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    html = import_run_html(out)
     assert "Already in Destination" in html
     assert symlinks_in_imported_albums(out) == []
 
@@ -105,7 +117,7 @@ def test_intra_run_duplicates_reported_separately(tmp_path):
     # Only the first copy lands in the library; the duplicate is reported under
     # its own heading rather than inflating "Already in Destination".
     assert len(copied_media_files(out)) == 1
-    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    html = import_run_html(out)
     assert "Intra-run Duplicates" in html
 
     links = symlinks_in_imported_albums(out)
@@ -126,7 +138,7 @@ def test_copy_failure_registers_no_alias(tmp_path, monkeypatch):
     out = tmp_path / "output"
     _run_import(make_args(src, out))
 
-    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    html = import_run_html(out)
     assert "Errors" in html
     assert symlinks_in_imported_albums(out) == []
 
@@ -143,8 +155,34 @@ def test_rerun_is_resume_safe(tmp_path):
     _run_import(make_args(src, out))
     assert len(copied_media_files(out)) == 1
 
-    html = (out / "report" / "index.html").read_text(encoding="utf-8")
+    html = import_run_html(out)
     assert "Already in Destination" in html
+
+
+def test_name_collision_renames_and_preserves_existing(tmp_path):
+    """Unique content (new md5) with a filename already in the output must be
+    renamed to _2, never overwrite the existing file."""
+    out = tmp_path / "output"
+    (out / "2020" / "05").mkdir(parents=True)
+    existing = out / "2020" / "05" / "IMG_20200510_120000.jpg"
+    existing.write_bytes(b"original-content")
+
+    src = tmp_path / "source"
+    (src / "folderA").mkdir(parents=True)
+    (src / "folderA" / "IMG_20200510_120000.jpg").write_bytes(b"different-content")
+
+    _run_import(make_args(src, out))
+
+    # Original untouched; import landed at the _2-suffixed name.
+    assert existing.read_bytes() == b"original-content"
+    renamed = out / "2020" / "05" / "IMG_20200510_120000_2.jpg"
+    assert renamed.read_bytes() == b"different-content"
+
+    # The ImportedAlbums symlink points at the renamed file and resolves.
+    links = symlinks_in_imported_albums(out)
+    assert len(links) == 1
+    assert links[0].name == "IMG_20200510_120000_2.jpg"
+    assert links[0].resolve() == renamed.resolve()
 
 
 def test_symlink_only_dest_is_not_a_false_positive(tmp_path):
@@ -289,7 +327,7 @@ def test_dry_run_copies_nothing_and_no_symlinks(tmp_path):
 
     assert copied_media_files(out) == []
     assert symlinks_in_imported_albums(out) == []
-    assert (out / "report" / "index.html").exists()
+    assert (out / "report-import" / "index.html").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +377,49 @@ def test_each_import_run_keeps_its_own_report(tmp_path):
     _run_import(make_args(src1, out))
     _run_import(make_args(src2, out))
 
-    report_dir = out / "report"
-    run_files = sorted(p.name for p in report_dir.glob("dedup-*.html"))
-    assert len(run_files) == 2
-    assert (report_dir / "index.html").exists()
+    report_dir = out / "report-import"
+    run_dirs = sorted(d.name for d in report_dir.iterdir()
+                      if d.is_dir() and d.name.startswith("import-"))
+    assert len(run_dirs) == 2
+    # Each run has its own browsable index; the listing links both.
+    for d in run_dirs:
+        assert (report_dir / d / "index.html").exists()
+    listing = (report_dir / "index.html").read_text(encoding="utf-8")
+    assert all(f"{d}/index.html" in listing for d in run_dirs)
+
+
+def test_import_does_not_touch_migration_report(tmp_path):
+    # Pre-existing migration report must survive an import run.
+    out = tmp_path / "output"
+    migration_report = out / "report" / "index.html"
+    migration_report.parent.mkdir(parents=True)
+    migration_report.write_text("migration-dashboard", encoding="utf-8")
+
+    src = tmp_path / "source"
+    (src / "folderA").mkdir(parents=True)
+    (src / "folderA" / "IMG_20200101_120000.jpg").write_bytes(b"aaa")
+    _run_import(make_args(src, out))
+
+    assert migration_report.read_text(encoding="utf-8") == "migration-dashboard"
+    assert (out / "report-import" / "index.html").exists()
+
+
+def test_import_report_browsable(tmp_path):
+    src = tmp_path / "source"
+    (src / "folderA").mkdir(parents=True)
+    (src / "folderA" / "IMG_20200101_120000.jpg").write_bytes(b"aaa")
+
+    out = tmp_path / "output"
+    _run_import(make_args(src, out))
+
+    run_dir = next(d for d in (out / "report-import").iterdir()
+                   if d.is_dir() and d.name.startswith("import-"))
+    html = (run_dir / "index.html").read_text(encoding="utf-8")
+    # Index links to the date-folder page and the album page...
+    assert "folder_2020_01.html" in html
+    assert "album_foldera.html" in html
+    # ...and those pages render a file card for the imported file.
+    folder_html = (run_dir / "folder_2020_01.html").read_text(encoding="utf-8")
+    assert "IMG_20200101_120000.jpg" in folder_html
+    album_html = (run_dir / "album_foldera.html").read_text(encoding="utf-8")
+    assert "IMG_20200101_120000.jpg" in album_html

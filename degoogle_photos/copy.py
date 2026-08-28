@@ -25,8 +25,13 @@ def compute_dest_path(output_root: Path, media_path: Path, dt: Optional[datetime
 
 
 def resolve_collision(dest_path: Path) -> Path:
-    """If dest_path exists, append _2, _3, etc. before the extension."""
-    if not dest_path.exists():
+    """If dest_path exists, append _2, _3, etc. before the extension.
+
+    Broken symlinks count as occupied (``exists()`` follows symlinks, so a
+    dangling link would otherwise look free and ``copy2`` would write through
+    it) — the guarantee is that an existing file is never overwritten.
+    """
+    if not dest_path.exists() and not dest_path.is_symlink():
         return dest_path
 
     stem = dest_path.stem
@@ -35,7 +40,7 @@ def resolve_collision(dest_path: Path) -> Path:
     counter = 2
     while True:
         candidate = parent / f"{stem}_{counter}{ext}"
-        if not candidate.exists():
+        if not candidate.exists() and not candidate.is_symlink():
             return candidate
         counter += 1
 

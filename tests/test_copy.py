@@ -86,6 +86,16 @@ def test_resolve_collision_increments(tmp_path):
     assert resolved == tmp_path / "photo_3.jpg"
 
 
+def test_resolve_collision_broken_symlink_treated_as_occupied(tmp_path):
+    # A dangling symlink at dest must not be written through — it counts as
+    # occupied even though exists() (which follows symlinks) says False.
+    dest = tmp_path / "photo.jpg"
+    dest.symlink_to(tmp_path / "nonexistent-target.jpg")
+    resolved = resolve_collision(dest)
+    assert resolved == tmp_path / "photo_2.jpg"
+    assert dest.is_symlink()  # symlink itself left in place
+
+
 def test_is_already_copied_same_size(tmp_path):
     src = tmp_path / "source.jpg"
     dst = tmp_path / "dest.jpg"

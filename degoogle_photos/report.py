@@ -38,6 +38,7 @@ class HtmlReport:
         self.output_root = output_root
         self.dry_run = dry_run
         self.report_dir = output_root / "report"
+        self.report_title = "Degoogle-Photos Report"
         # files_by_folder["2020/03"] = [{"name": ..., "dest": ..., ...}, ...]
         self.files_by_folder = defaultdict(list)  # type: dict[str, list]
         # files_by_album["My Vacation"] = [{"name": ..., ...}, ...]
@@ -130,6 +131,12 @@ class HtmlReport:
             parts.append('<nav class="back"><a href="index.html">&larr; Back to Dashboard</a></nav>')
         return '\n'.join(parts)
 
+    def _extra_stats(self, html: list):
+        """Hook for subclasses: append extra summary stats to the stat-grid."""
+
+    def _extra_sections(self, html: list):
+        """Hook for subclasses: append extra sections before the footer."""
+
     def _write_index(self):
         total_copied = sum(len(v) for v in self.files_by_folder.values())
         total_dupes = len(self.duplicates)
@@ -137,9 +144,9 @@ class HtmlReport:
 
         html = []
         prefix = "[DRY RUN] " if self.dry_run else ""
-        html.append(self._page_head(f"{prefix}Degoogle-Photos Report"))
+        html.append(self._page_head(f"{prefix}{self.report_title}"))
 
-        html.append(f'<header><h1>{prefix}Degoogle-Photos Report</h1>')
+        html.append(f'<header><h1>{prefix}{self.report_title}</h1>')
         html.append(f'<p class="updated">Last updated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
                      f' &mdash; {self.processed}/{self.total} files processed</p></header>')
 
@@ -157,6 +164,7 @@ class HtmlReport:
         if unknown_total > 0:
             html.append(f'<div class="stat"><span class="num"><a href="#attention-needed">{unknown_total}</a></span>'
                         f'<span class="label">Unknown month</span></div>')
+        self._extra_stats(html)
         html.append('</div>')
 
         # Date source breakdown
@@ -222,6 +230,8 @@ class HtmlReport:
             for e in self.errors:
                 html.append(f'<tr><td>{_html_escape(e["source"])}</td><td>{_html_escape(e["error"])}</td></tr>')
             html.append('</table></section>')
+
+        self._extra_sections(html)
 
         html.append(_FOOTER)
         html.append('</body></html>')
@@ -326,13 +336,17 @@ class HtmlReport:
 
 
 class DedupReport:
-    """HTML report for a dedup scan (no Takeout structure required)."""
+    """HTML report for a dedup scan (no Takeout structure required).
+
+    Writes to ``<output>/report-dedup/`` so it never clobbers the migration
+    report at ``<output>/report/``.
+    """
 
     def __init__(self, output_dir: Path, dry_run: bool, mode_label: str = "Dedup"):
         self.output_dir = output_dir
         self.dry_run = dry_run
         self.mode_label = mode_label
-        self.report_dir = output_dir / "report"
+        self.report_dir = output_dir / "report-dedup"
         self.groups: list = []   # [{"md5": str, "files": [{"path", "name", "size", "keeper"}]}]
         self.scanned = 0
         self.total = 0
@@ -540,6 +554,111 @@ class DedupReport:
         html.append(_FOOTER)
         html.append('</body></html>')
         return "\n".join(html)
+
+
+class ImportReport(HtmlReport):
+    """Browsable report for ``--dedup-import`` runs.
+
+    Reuses ``HtmlReport``'s date-folder/album structure and file cards (the
+    source's immediate parent dir acts as the album name), and adds
+    import-specific skip tables. Each run's pages live in a timestamped
+    subdirectory (``report-import/import-<ts>/``) so history survives across
+    imports; ``report-import/index.html`` is regenerated as a listing of all
+    runs, newest first. Migration's ``report/`` is never touched.
+    """
+
+    def __init__(self, output_root: Path, dry_run: bool):
+        super().__init__(output_root, dry_run)
+        self.report_dir = output_root / "report-import"
+        self.report_title = "Dedup-import Report"
+        self.scanned = 0
+        self.copied = 0
+        self.skipped_dest: list = []   # [{"source", "dest"}] — content existed pre-run
+        self.skipped_intra: list = []  # [{"source", "dest"}] — source-internal duplicates
+        self.run_dir: Optional[Path] = None  # set by write()
+
+    def add_skipped_dest(self, source: Path, dest: Path):
+        """Record a source file skipped because its content already exists in the destination."""
+        self.skipped_dest.append({"source": str(source), "dest": str(dest)})
+
+    def add_skipped_intra(self, source: Path, dest: Path):
+        """Record a source file skipped because its content was copied earlier in this run."""
+        self.skipped_intra.append({"source": str(source), "dest": str(dest)})
+
+    def write(self):
+        """Write this run's pages under report-import/import-<ts>/ and refresh
+        the run listing at report-import/index.html."""
+        self.processed = self.total  # written at end of run; header shows done state
+        run_dir = self.report_dir / f"import-{datetime.now():%Y%m%d-%H%M%S-%f}"
+        self.run_dir = run_dir
+        saved = self.report_dir
+        self.report_dir = run_dir
+        try:
+            self._write()
+        finally:
+            self.report_dir = saved
+        self._write_runs_index()
+
+    def _write_runs_index(self):
+        """Regenerate report-import/index.html listing all run dirs, newest first."""
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        run_dirs = sorted(
+            (d for d in self.report_dir.iterdir()
+             if d.is_dir() and d.name.startswith("import-")
+             and (d / "index.html").exists()),
+            key=lambda d: d.name, reverse=True,
+        )
+        html = [self._page_head("Dedup-import Reports")]
+        html.append('<header><h1>Dedup-import Reports</h1></header>')
+        if not run_dirs:
+            html.append('<p>No import runs yet.</p>')
+        else:
+            html.append('<table><tr><th>Run</th><th>Report</th></tr>')
+            for d in run_dirs:
+                stamp = d.name[len("import-"):]
+                html.append(f'<tr><td>{_html_escape(stamp)}</td>'
+                            f'<td><a href="{d.name}/index.html">Open report</a></td></tr>')
+            html.append('</table>')
+        html.append(_FOOTER)
+        html.append('</body></html>')
+        (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
+
+    def _extra_stats(self, html: list):
+        if self.skipped_dest:
+            html.append(f'<div class="stat"><span class="num">{len(self.skipped_dest)}</span>'
+                        f'<span class="label">Already in destination</span></div>')
+        if self.skipped_intra:
+            html.append(f'<div class="stat"><span class="num">{len(self.skipped_intra)}</span>'
+                        f'<span class="label">Intra-run duplicates</span></div>')
+
+    def _extra_sections(self, html: list):
+        if self.skipped_dest:
+            html.append('<section><h2>Already in Destination</h2>')
+            self._skip_table(html, self.skipped_dest,
+                             'their content already exists in the output.')
+            html.append('</section>')
+        if self.skipped_intra:
+            html.append('<section><h2>Intra-run Duplicates</h2>')
+            self._skip_table(html, self.skipped_intra,
+                             'the source contained duplicate content; '
+                             'only the first copy was imported.')
+            html.append('</section>')
+
+    @staticmethod
+    def _skip_table(html: list, rows: list, blurb: str):
+        html.append(f'<p>{len(rows)} source files were skipped because {blurb}</p>')
+        html.append('<table><tr><th>Source</th><th>Destination</th><th></th></tr>')
+        for s in rows:
+            src_btn = (f'<button class="copy-btn" '
+                       f'onclick="copyText(this, \'{_js_string(s["source"])}\')" '
+                       f'title="Copy source path">&#x1f4cb; Src</button>')
+            dst_btn = (f'<button class="copy-btn" '
+                       f'onclick="copyText(this, \'{_js_string(s["dest"])}\')" '
+                       f'title="Copy destination path">&#x1f4cb; Dest</button>')
+            html.append(f'<tr><td style="font-size:0.8em;word-break:break-all">{_html_escape(s["source"])}</td>'
+                        f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(s["dest"])}</td>'
+                        f'<td style="white-space:nowrap">{src_btn} {dst_btn}</td></tr>')
+        html.append('</table>')
 
 
 def _fmt_bytes(n: int) -> str:

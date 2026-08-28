@@ -22,12 +22,14 @@ def make_args(source, output, dry_run=False):
 
 
 def media_files_in_output(output: Path):
-    """All files under output, excluding by-folder/ and report/ subtrees."""
+    """All files under output, excluding by-folder/ and report*/ subtrees."""
     return [
         p for p in output.rglob("*")
         if p.is_file()
         and "by-folder" not in p.parts
         and "report" not in p.parts
+        and "report-dedup" not in p.parts
+        and "report-import" not in p.parts
     ]
 
 

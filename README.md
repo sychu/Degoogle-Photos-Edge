@@ -181,10 +181,12 @@ DeGoogle-Edge Photos/
   ImportedAlbums/                     ← aliases keyed by source parent dir
     vacation/
       VID_new.mp4  →  ../../2020/03/VID_new.mp4
-  report/index.html
+  report-import/
+    index.html                        ← listing of all import runs
+    import-<timestamp>/index.html     ← browsable report for one run
 ```
 
-The destination is scanned for existing files on every run (nothing is cached on disk), so reruns are safe and idempotent.
+The destination is scanned for existing files on every run (nothing is cached on disk), so reruns are safe and idempotent. New files whose name already exists in the output (different content) are renamed with a `_2`, `_3` suffix — existing files are never overwritten. Each import gets its own browsable report (date folders + album pages, same layout as the migration report) under `report-import/import-<timestamp>/`; `report-import/index.html` links all runs, and the migration report at `report/index.html` is never touched.
 
 ### All options
 
@@ -218,7 +220,15 @@ The destination is scanned for existing files on every run (nothing is cached on
 
 ## HTML Report
 
-The report is written to `<output>/report/index.html` and includes:
+Each mode writes to its own report directory so they never clobber each other:
+
+| Mode | Location |
+|------|----------|
+| Takeout migration (default) | `<output>/report/index.html` |
+| Dedup scan (`--dedup-scan`) | `<output>/report-dedup/index.html` |
+| Dedup import (`--dedup-import`) | `<output>/report-import/index.html` (listing; runs under `import-<timestamp>/`) |
+
+The migration report includes:
 
 - Dashboard with copy/duplicate/error counts and date-source breakdown
 - "Attention needed" section surfacing files in `needs_review/` and `YYYY/unknown/`

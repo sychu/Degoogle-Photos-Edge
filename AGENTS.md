@@ -29,8 +29,15 @@ Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into
 - **Dedup-import mode (`--dedup-import`):** Merges an unorganised backup (no Takeout/JSON)
   into an already-organised library. It hashes the existing real files in `--output`
   (symlinks excluded) into an in-memory `existing_md5s` set, skips source files whose MD5
-  matches, copies new files into `YYYY/MM/` (same date cascade/collisions as dedup mode),
-  and creates directory-name aliases under a separate `ImportedAlbums/` root (no `by-folder/`).
+  matches, copies new files into `YYYY/MM/` (same date cascade/collisions as dedup mode —
+  a same-named file with different content is renamed `_2`, never overwritten), and
+  creates directory-name aliases under a separate `ImportedAlbums/` root (no `by-folder/`).
+  Reruns merge into an existing dated album dir with the same leaf name rather than
+  creating a second dated dir.
+
+Reports are per-mode so they never clobber each other: migration → `report/`, dedup-scan →
+`report-dedup/`, dedup-import → `report-import/` (each import run gets a browsable
+`import-<timestamp>/` page set; `report-import/index.html` lists all runs newest-first).
 
 The package is pure Python stdlib plus `Pillow`. Build/packaging is managed exclusively by
 `pyproject.toml`. There is a thin `migrate_photos.py` wrapper that delegates to
@@ -80,7 +87,9 @@ pytest -v tests/test_dedup_mode.py -k import_name
 - `sniff.py` — magic-byte detection for mislabeled `.heic`-as-video Live Photo parts.
 - `copy.py` — file copying with collision resolution and sidecar handling.
 - `albums.py` — album symlink creation.
-- `report.py` — HTML report generation (migration + dedup modes).
+- `report.py` — HTML report generation. `HtmlReport` (migration, `report/`), `DedupReport`
+  (scan, `report-dedup/`), and `ImportReport(HtmlReport)` (import, `report-import/` with
+  per-run `import-<timestamp>/` pages + a run-listing index).
 - `logging_util.py` — migration logging and progress reporting.
 - `cli.py` — entry point orchestrating migration and dedup-scan; defines `MEDIA_EXTENSIONS`.
 
