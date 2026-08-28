@@ -10,7 +10,7 @@ CONTRIBUTING.md content here, to keep the two from drifting apart.
 ## Project overview
 
 Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into clean
-`YYYY/MM/` folder hierarchies. It has two operating modes:
+`YYYY/MM/` folder hierarchies. It has three operating modes:
 
 - **Takeout migration (default):** Scans multiple `Takeout*/Google Photos/` directories,
   builds a global index, extracts the best date per file (EXIF > JSON `photoTakenTime` >
@@ -26,6 +26,11 @@ Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into
   keeps one file per duplicate group (shortest path wins), copies unique files into a
   date-organised `YYYY/MM/` structure, and recreates the source folder tree under
   `by-folder/` as relative symlinks. The source folders are never modified.
+- **Dedup-import mode (`--dedup-import`):** Merges an unorganised backup (no Takeout/JSON)
+  into an already-organised library. It hashes the existing real files in `--output`
+  (symlinks excluded) into an in-memory `existing_md5s` set, skips source files whose MD5
+  matches, copies new files into `YYYY/MM/` (same date cascade/collisions as dedup mode),
+  and creates directory-name aliases under a separate `ImportedAlbums/` root (no `by-folder/`).
 
 The package is pure Python stdlib plus `Pillow`. Build/packaging is managed exclusively by
 `pyproject.toml`. There is a thin `migrate_photos.py` wrapper that delegates to

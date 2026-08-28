@@ -13,7 +13,7 @@ from typing import Optional
 from .indexing import find_takeout_dirs, build_index, find_json_for_media, find_all_media_files
 from .dates import extract_date
 from .metadata import extract_metadata
-from .dedup import compute_md5, make_dedup_key, group_duplicates
+from .dedup import compute_md5, make_dedup_key, group_duplicates, hash_files
 from .copy import (
     compute_dest_path,
     resolve_collision,
@@ -196,6 +196,188 @@ def _run_dedup(args):
         webbrowser.open(report_index.resolve().as_uri())
 
 
+def _is_within(path: Path, parent: Path) -> bool:
+    """Return True if `path` is `parent` itself or a descendant of `parent`."""
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _run_import(args):
+    """
+    Dedup-import mode: merge an unorganized backup (no Takeout/JSON structure)
+    into an already-organised library, skipping files whose content already
+    exists in --output. Unlike --dedup-scan, the output is treated as the
+    reference set and directory-based aliases go under ImportedAlbums/ instead
+    of a by-folder/ mirror.
+    """
+    source_roots = [p.resolve() for p in args.source]
+    output_root = args.output.resolve()
+    dry_run = args.dry_run
+
+    for src in source_roots:
+        if not src.is_dir():
+            print(f"ERROR: --source '{src}' is not a directory.")
+            raise SystemExit(1)
+
+    # Overlap guard: a source cannot contain or be contained by the output,
+    # otherwise it would match itself during the destination-aware skip.
+    for src in source_roots:
+        if _is_within(src, output_root) or _is_within(output_root, src):
+            print(f"ERROR: --source '{src}' and --output '{output_root}' overlap; "
+                  f"the source would match itself.")
+            raise SystemExit(1)
+
+    report = DedupReport(output_root, dry_run, mode_label="Dedup-import")
+    start = time.time()
+
+    # Phase 0: hash existing (real) files in the output into an in-memory set.
+    # Symlinks (Albums/, by-folder/, ImportedAlbums/) are excluded so they never
+    # count as a pre-existing copy of a source file.
+    existing_md5s = set()
+    if output_root.is_dir():
+        print("Phase 0: Hashing existing destination files...")
+        existing_files = [
+            f for f in find_all_media_files(output_root, MEDIA_EXTENSIONS)
+            if not f.is_symlink()
+        ]
+        if existing_files:
+            try:
+                existing_md5s = set(hash_files(existing_files).values())
+            except Exception as e:
+                print(f"\nERROR hashing destination: {e}")
+                raise SystemExit(1)
+        print(f"  {len(existing_md5s)} existing media files hashed")
+
+    # Phase 1: Find all media files across all source roots
+    all_files = []
+    for src in source_roots:
+        print(f"Phase 1: Scanning '{src}'...")
+        found = find_all_media_files(src, MEDIA_EXTENSIONS)
+        print(f"  Found {len(found)} media files")
+        all_files.extend(found)
+
+    print(f"  Total: {len(all_files)} media files across {len(source_roots)} source(s)")
+    report.total = len(all_files)
+
+    # Phase 2: Compute MD5s
+    print(f"\nPhase 2: Computing checksums...")
+    progress_interval = max(1, len(all_files) // 200)
+
+    def _progress(current, total):
+        report.scanned = current
+        if current % progress_interval == 0 or current == total:
+            elapsed = time.time() - start
+            rate = current / elapsed if elapsed > 0 else 0
+            pct = current / total * 100 if total > 0 else 0
+            print(
+                f"\r  {current}/{total} ({pct:.1f}%) | {rate:.0f} files/sec",
+                end="", flush=True,
+            )
+
+    try:
+        file_md5 = hash_files(all_files, progress_cb=_progress)
+    except Exception as e:
+        print(f"\nERROR during scan: {e}")
+        raise SystemExit(1)
+    print()
+
+    # Phase 3: Copy new files and skip ones already in the destination.
+    # Directory-based aliases are keyed by the source's immediate parent dir.
+    action = "Would copy" if dry_run else "Copying"
+    print(f"\nPhase 3: {action} new files to '{output_root}' (date-organised)...")
+    album_files = defaultdict(list)  # parent_dir_name -> [(dest, prefix_dt|None), ...]
+    copied = 0
+    skipped_dest = 0
+    skipped_intra = 0
+    errors = 0
+    run_md5_to_dest = {}  # md5 -> dest of files copied during this run
+    copy_interval = max(1, len(all_files) // 200)
+
+    for i, src in enumerate(all_files, 1):
+        dt, date_source = extract_date(src, None)
+        prefix_dt = dt if date_source != "parent_dir" else None
+        dest = compute_dest_path(
+            output_root, src, dt, date_source,
+            dest_name=effective_media_name(src),
+        )
+        md5 = file_md5[src]
+
+        known_in_run = run_md5_to_dest.get(md5)
+        if known_in_run is not None:
+            # Intra-run duplicate: copied earlier in this run, dest is unambiguous.
+            report.add_skipped_intra(src, known_in_run)
+            skipped_intra += 1
+            album_files[src.parent.name].append((known_in_run, prefix_dt))
+        elif md5 in existing_md5s:
+            # Was in the destination before this run started. Register the alias
+            # only when the collision-guess dest resolves, to avoid dangling
+            # links against moved/renamed libraries (dry runs never check).
+            report.add_skipped_dest(src, dest)
+            skipped_dest += 1
+            if dry_run or dest.exists():
+                album_files[src.parent.name].append((dest, prefix_dt))
+        else:
+            try:
+                if not dry_run:
+                    dest = resolve_collision(dest)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dest)
+                existing_md5s.add(md5)
+                # Register the alias only on the success path — failed copies
+                # must not leave a dangling ImportedAlbums/ entry behind.
+                album_files[src.parent.name].append((dest, prefix_dt))
+                if date_source in ("parent_dir", "none"):
+                    report.add_attention(src, dest, date_source)
+                copied += 1
+                run_md5_to_dest[md5] = dest
+            except Exception as e:
+                msg = f"{type(e).__name__}: {e}"
+                report.add_error(src, msg)
+                errors += 1
+
+        if i % copy_interval == 0 or i == len(all_files):
+            pct = i / len(all_files) * 100 if all_files else 0
+            print(f"\r  {i}/{len(all_files)} ({pct:.1f}%)", end="", flush=True)
+
+    print()
+    report.copied = copied
+
+    # Phase 4: Create ImportedAlbums/<parent-dir>/ symlinks (no by-folder/ mirror)
+    create_album_symlinks(output_root, album_files, dry_run, log=MigrationLog(output_root, dry_run),
+                          root_name="ImportedAlbums", phase="Phase 4")
+
+    # Write report
+    output_root.mkdir(parents=True, exist_ok=True)
+    report.write()
+
+    elapsed = time.time() - start
+    report_index = report.report_dir / "index.html"
+
+    prefix = "[DRY RUN] " if dry_run else ""
+    print(f"\n{'='*60}")
+    print(f"{prefix}Dedup-import Summary")
+    print(f"{'='*60}")
+    print(f"Files scanned:           {report.scanned}")
+    print(f"Already in destination:  {skipped_dest}")
+    if skipped_intra:
+        print(f"Intra-run duplicates:    {skipped_intra}")
+    print(f"New files copied:        {copied}")
+    if errors:
+        print(f"Errors:                  {errors}")
+    print(f"Time elapsed:            {elapsed:.1f}s")
+    print(f"{'='*60}")
+    for src in source_roots:
+        print(f"Source: {src}")
+    print(f"\nDate folders:     {output_root}")
+    print(f"Imported albums:  {output_root / 'ImportedAlbums'}")
+    print(f"Report:           {report.report_dir} (see index.html + dated run files)")
+    if report_index.exists():
+        webbrowser.open(report_index.resolve().as_uri())
+
+
 def main():
     parser = argparse.ArgumentParser(description="Migrate Google Takeout photos to YYYY/MM/ structure")
     parser.add_argument("--dry-run", action="store_true", help="Report what would be done without copying or deleting")
@@ -205,11 +387,16 @@ def main():
     parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogle-Edge Photos",
                         help="Output root for organized photos or dedup report (default: ./DeGoogle-Edge Photos)")
 
-    # Dedup mode
-    parser.add_argument("--dedup-scan", action="store_true",
-                        help="Copy deduplicated media files from --source to --output. "
-                             "One file is kept per duplicate group (shortest path wins). "
-                             "The source folder is never modified.")
+    # Dedup modes (mutually exclusive)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--dedup-scan", action="store_true",
+                            help="Copy deduplicated media files from --source to --output. "
+                                 "One file is kept per duplicate group (shortest path wins). "
+                                 "The source folder is never modified.")
+    mode_group.add_argument("--dedup-import", action="store_true",
+                            help="Merge an unorganized backup into an existing organised "
+                                 "library. Files whose content already exists in --output are "
+                                 "skipped; directory-based aliases go under ImportedAlbums/.")
 
     args = parser.parse_args()
 
@@ -217,6 +404,10 @@ def main():
         if args.output == Path.cwd() / "DeGoogle-Edge Photos":
             args.output = Path.cwd() / "Deduped-Edge Photos"
         _run_dedup(args)
+        return
+
+    if args.dedup_import:
+        _run_import(args)
         return
 
     source_root = args.source[0]

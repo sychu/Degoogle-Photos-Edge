@@ -47,6 +47,12 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 - Recreates the original folder tree under `by-folder/` as symlinks pointing at the date-organised files
 - The source folder is never modified
 
+**Dedup-import mode** (`--dedup-import`):
+- Merges an unorganised backup (old drive, no Takeout/JSON structure) into an already-organised library
+- Skips any source file whose content (MD5) already exists in `--output`, so pre-existing photos are never re-copied or renamed with a `_2` suffix
+- Copies new files into the existing `YYYY/MM/` structure using the same date cascade and collision resolution as dedup mode
+- Creates `ImportedAlbums/<parent-dir>/` symlink aliases (no `by-folder/` mirror)
+
 ## Prerequisites
 
 - Python 3.9+
@@ -150,6 +156,36 @@ rsync -a --progress \
 
 > **If `degoogle-photos` is not found** on your PATH, use `python3 -m degoogle_photos.cli` in place of `degoogle-photos` in all commands above.
 
+### Dedup-import mode
+
+Merge an old, unorganised backup into an existing degoogled library. Files already in the output (matched by content hash) are skipped, and directory-based aliases are written under `ImportedAlbums/` so they never collide with Google Photos albums.
+
+```bash
+# Preview — hashes the existing destination and reports what would be copied
+python3 -m degoogle_photos.cli --dedup-import --dry-run \
+  --source "/path/to/old drive photos" \
+  --output "/path/to/DeGoogle-Edge Photos"
+
+# Merge new files into the existing library
+python3 -m degoogle_photos.cli --dedup-import \
+  --source "/path/to/old drive photos" \
+  --output "/path/to/DeGoogle-Edge Photos"
+```
+
+**Output structure:**
+```
+DeGoogle-Edge Photos/
+  2019/07/IMG_001.jpg                 ← already present, skipped by hash
+  2020/03/VID_new.mp4                 ← newly copied from the old drive
+  needs_review/IMG_nodate.jpg
+  ImportedAlbums/                     ← aliases keyed by source parent dir
+    vacation/
+      VID_new.mp4  →  ../../2020/03/VID_new.mp4
+  report/index.html
+```
+
+The destination is scanned for existing files on every run (nothing is cached on disk), so reruns are safe and idempotent.
+
 ### All options
 
 | Flag | Default | Description |
@@ -158,6 +194,7 @@ rsync -a --progress \
 | `--output PATH` | `./DeGoogle-Edge Photos` | Destination for organised photos or dedup output |
 | `--dry-run` | off | Report what would be done without copying any files |
 | `--dedup-scan` | off | Dedup mode: scan any folder(s) instead of running a Takeout migration |
+| `--dedup-import` | off | Merge an unorganised backup into an existing organised library (mutually exclusive with `--dedup-scan`) |
 
 ## How it works
 

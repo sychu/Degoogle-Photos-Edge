@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from degoogle_photos.albums import (
     create_album_symlinks,
     _GENERIC_ALBUM_RE,
-    _format_album_name,
+    album_folder_name,
     _normalize_leading_date,
 )
 
@@ -161,9 +161,9 @@ def test_normalize_leading_date():
 
 
 def test_format_album_name():
-    assert _format_album_name("Trip", datetime(2020, 5, 11)) == "2020-05-11 Trip"
-    assert _format_album_name("2020.05.11 Trip", datetime(2018, 1, 3)) == "2020-05-11 Trip"
-    assert _format_album_name("Trip", None) == "Trip"
+    assert album_folder_name("Trip", datetime(2020, 5, 11)) == "2020-05-11 Trip"
+    assert album_folder_name("2020.05.11 Trip", datetime(2018, 1, 3)) == "2020-05-11 Trip"
+    assert album_folder_name("Trip", None) == "Trip"
 
 
 def test_legacy_unprefixed_folder_removed(tmp_path):

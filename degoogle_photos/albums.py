@@ -45,14 +45,22 @@ def _normalize_leading_date(name: str) -> Optional[str]:
     return f"{formatted} {rest}" if rest else formatted
 
 
-def _format_album_name(album_name: str, oldest_dt: Optional[datetime]) -> str:
-    """Return the album folder name, prefixed with its oldest file's date if needed."""
-    normalized = _normalize_leading_date(album_name)
+def album_folder_name(name: str, oldest_dt: Optional[datetime]) -> str:
+    """Return the album folder name, prefixed with its oldest file's date if needed.
+
+    Shared by migration mode (``Albums/``) and import mode (``ImportedAlbums/``)
+    so both apply the same date-prefix rules.
+    """
+    normalized = _normalize_leading_date(name)
     if normalized is not None:
         return normalized
     if oldest_dt is not None:
-        return f"{oldest_dt:%Y-%m-%d} {album_name}"
-    return album_name
+        return f"{oldest_dt:%Y-%m-%d} {name}"
+    return name
+
+
+# Backward-compatible alias for callers that used the original private name.
+_format_album_name = album_folder_name
 
 
 def create_album_symlinks(
@@ -60,9 +68,15 @@ def create_album_symlinks(
     album_files: dict,
     dry_run: bool,
     log: 'MigrationLog',
+    root_name: str = "Albums",
+    phase: str = "Phase 5",
 ):
-    """Create Albums/<album_name>/ folders with symlinks to the actual files."""
-    albums_dir = output_root / "Albums"
+    """Create <root_name>/<album_name>/ folders with symlinks to the actual files.
+
+    `phase` is the printed progress header — migration mode runs this at
+    Phase 5, import mode at Phase 4.
+    """
+    albums_dir = output_root / root_name
     real_albums = {name: paths for name, paths in album_files.items()
                    if not _GENERIC_ALBUM_RE.match(name) and len(paths) > 0}
 
@@ -70,7 +84,7 @@ def create_album_symlinks(
         print("No named albums to link.")
         return
 
-    print(f"\nPhase 5: Creating album symlinks for {len(real_albums)} albums...")
+    print(f"\n{phase}: Creating album symlinks for {len(real_albums)} albums...")
     link_count = 0
     skip_count = 0
 
@@ -89,23 +103,42 @@ def create_album_symlinks(
             resolved_paths.append(dest_path)
 
         # Sanitize album name for filesystem
-        safe_name = _format_album_name(album_name, oldest_dt)
-        safe_name = safe_name.replace("/", "-").replace(":", "-").strip()
-        if not safe_name:
+        candidate_name = album_folder_name(album_name, oldest_dt)
+        candidate_name = candidate_name.replace("/", "-").replace(":", "-").strip()
+        if not candidate_name:
             continue
+        safe_name = candidate_name
+
+        # Reuse an existing dated dir with the same base name: on rerun the
+        # symlinks for a leaf go into the pinned dated dir instead of creating
+        # a second dated dir (e.g. '2020-01-01 family' reused in a later run
+        # that would have computed '2020-03-03 family'). Base comparison is on
+        # the leaf's raw name (before any date prefix), so 'family' matches
+        # '2020-01-01 family'.
+        for existing in sorted(albums_dir.iterdir()) if albums_dir.exists() else []:
+            if not existing.is_dir():
+                continue
+            m = re.match(r"^\d{4}-\d{2}-\d{2}\s+(?P<rest>.*)$", existing.name)
+            if not m:
+                continue
+            base_name = m.group("rest").strip()
+            if base_name == album_name.strip():
+                safe_name = existing.name
+                break
+
         album_dir = albums_dir / safe_name
 
         if not dry_run:
             album_dir.mkdir(parents=True, exist_ok=True)
             # Remove a legacy folder left by an earlier run under the album's
-            # original (unprefixed or differently formatted) name, so reruns do
-            # not accumulate duplicate folders. Only folders whose entries are
-            # all symlinks are removed — anything else is left in place to avoid
-            # deleting user data.
+            # original (unprefixed) name, so reruns do not accumulate duplicate
+            # folders. Only folders whose entries are all symlinks are removed
+            # — anything else is left in place to avoid deleting user data.
             legacy_name = album_name.replace("/", "-").replace(":", "-").strip()
             if legacy_name and legacy_name != safe_name:
                 legacy_dir = albums_dir / legacy_name
-                if legacy_dir.is_dir() and not legacy_dir.is_symlink():
+                if legacy_dir != album_dir and legacy_dir.is_dir() \
+                        and not legacy_dir.is_symlink():
                     try:
                         entries = list(legacy_dir.iterdir())
                     except OSError as e:

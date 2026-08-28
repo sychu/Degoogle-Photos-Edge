@@ -19,6 +19,24 @@ def compute_md5(file_path: Path) -> str:
     return h.hexdigest()
 
 
+def hash_files(
+    files: List[Path],
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+) -> Dict[Path, str]:
+    """
+    Hash each file once and return a Path -> md5 map.
+
+    progress_cb(current, total) is called after each file is hashed, if provided.
+    """
+    total = len(files)
+    result: Dict[Path, str] = {}
+    for i, fpath in enumerate(files, 1):
+        result[fpath] = compute_md5(fpath)
+        if progress_cb:
+            progress_cb(i, total)
+    return result
+
+
 def group_duplicates(
     files: List[Path],
     progress_cb: Optional[Callable[[int, int], None]] = None,
@@ -32,13 +50,11 @@ def group_duplicates(
 
     progress_cb(current, total) is called after each file if provided.
     """
+    file_md5 = hash_files(files, progress_cb=progress_cb)
+
     md5_groups: Dict[str, List[Path]] = defaultdict(list)
-    total = len(files)
-    for i, fpath in enumerate(files, 1):
-        md5 = compute_md5(fpath)
+    for fpath, md5 in file_md5.items():
         md5_groups[md5].append(fpath)
-        if progress_cb:
-            progress_cb(i, total)
 
     result = []
     for md5, group in md5_groups.items():

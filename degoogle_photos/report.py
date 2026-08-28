@@ -328,9 +328,10 @@ class HtmlReport:
 class DedupReport:
     """HTML report for a dedup scan (no Takeout structure required)."""
 
-    def __init__(self, output_dir: Path, dry_run: bool):
+    def __init__(self, output_dir: Path, dry_run: bool, mode_label: str = "Dedup"):
         self.output_dir = output_dir
         self.dry_run = dry_run
+        self.mode_label = mode_label
         self.report_dir = output_dir / "report"
         self.groups: list = []   # [{"md5": str, "files": [{"path", "name", "size", "keeper"}]}]
         self.scanned = 0
@@ -338,10 +339,20 @@ class DedupReport:
         self.copied = 0
         self.errors: list = []   # [{"path": str, "error": str}]
         self.attention: list = []  # [{"source", "dest", "date_source"}]
+        self.skipped_dest: list = []  # [{"source", "dest"}] — already in destination
+        self.skipped_intra: list = []  # [{"source", "dest"}] — duplicates of files copied in this run
 
     def add_attention(self, src, dest, date_source):
         """Add a file that needs manual review (needs_review/ or YYYY/unknown/)."""
         self.attention.append({"source": str(src), "dest": str(dest), "date_source": date_source})
+
+    def add_skipped_dest(self, source: Path, dest: Path):
+        """Record a source file skipped because its content already exists in the destination."""
+        self.skipped_dest.append({"source": str(source), "dest": str(dest)})
+
+    def add_skipped_intra(self, source: Path, dest: Path):
+        """Record a source file skipped because its content was copied earlier in this run."""
+        self.skipped_intra.append({"source": str(source), "dest": str(dest)})
 
     def add_group(self, md5: str, files):
         """Add a duplicate group. files is a list of Path; first entry is the keeper."""
@@ -364,16 +375,28 @@ class DedupReport:
         self.errors.append({"path": str(path), "error": error})
 
     def write(self):
+        """Write the report to a timestamped run file and refresh index.html.
+
+        Each run gets a ``dedup-YYYYMMDD-HHMMSS.html`` file so history from
+        multiple imports is preserved; index.html always mirrors the latest
+        run (and older timestamped files hang alongside it).
+        """
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self._write_css()
-        self._write_index()
+        html = self._build_index_html()
+        # Microseconds keep back-to-back runs from colliding on the filename,
+        # and zero-padded naming keeps the files lexicographically sortable.
+        timestamped = f"dedup-{datetime.now():%Y%m%d-%H%M%S-%f}.html"
+        (self.report_dir / timestamped).write_text(html, encoding="utf-8")
+        (self.report_dir / "index.html").write_text(html, encoding="utf-8")
 
     # ------------------------------------------------------------------
 
     def _write_css(self):
         (self.report_dir / "style.css").write_text(_CSS, encoding="utf-8")
 
-    def _write_index(self):
+    def _build_index_html(self) -> str:
+        """Build and return the report's index page content (no file write)."""
         dupe_file_count = sum(len(g["files"]) - 1 for g in self.groups)
         wasted_bytes = sum(
             f["size"] for g in self.groups for f in g["files"] if not f["keeper"]
@@ -384,15 +407,18 @@ class DedupReport:
         html.append(
             '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<title>{prefix}Dedup Report</title>'
+            f'<title>{prefix}{self.mode_label} Report</title>'
             '<link rel="stylesheet" href="style.css">'
             '<script>function copyText(btn,t){navigator.clipboard.writeText(t).then(function(){'
             'var o=btn.textContent;btn.textContent="Copied!";setTimeout(function(){btn.textContent=o},1000)})}</script>'
             '</head><body>'
         )
-        html.append(f'<header><h1>{prefix}Dedup Report</h1>'
+        subtitle = ("Source is read-only. New content was merged into the existing library."
+                    if self.mode_label == "Dedup-import" else
+                    "Source is read-only. One file per duplicate group was copied to the output folder.")
+        html.append(f'<header><h1>{prefix}{self.mode_label} Report</h1>'
                     f'<p class="updated" style="color:#8b949e;font-size:0.9em;margin-top:4px">'
-                    f'Source is read-only. One file per duplicate group was copied to the output folder.</p>')
+                    f'{subtitle}</p>')
         html.append(f'<p class="updated">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
                     f' &mdash; {self.scanned}/{self.total} files scanned</p></header>')
 
@@ -403,9 +429,13 @@ class DedupReport:
         html.append(f'<div class="stat"><span class="num">{len(self.groups)}</span><span class="label">Duplicate groups</span></div>')
         html.append(f'<div class="stat"><span class="num">{dupe_file_count}</span><span class="label">Duplicates skipped</span></div>')
         html.append(f'<div class="stat"><span class="num">{_fmt_bytes(wasted_bytes)}</span><span class="label">Space saved</span></div>')
+        if self.skipped_dest:
+            html.append(f'<div class="stat"><span class="num">{len(self.skipped_dest)}</span><span class="label">Already in destination</span></div>')
+        if self.skipped_intra:
+            html.append(f'<div class="stat"><span class="num">{len(self.skipped_intra)}</span><span class="label">Intra-run duplicates</span></div>')
         html.append('</div>')
 
-        if not self.groups:
+        if not self.groups and not self.skipped_dest and not self.skipped_intra:
             html.append('<p style="color:#3fb950;margin-top:16px">No duplicates found.</p>')
         html.append('</section>')
 
@@ -438,6 +468,33 @@ class DedupReport:
                 for a in unknown:
                     html.append(_row(a))
                 html.append('</table>')
+            html.append('</section>')
+
+        # Files already in the destination (import mode) / intra-run duplicates
+        def _skip_table(rows, blurb):
+            html.append(f'<p>{len(rows)} source files were skipped because {blurb}</p>')
+            html.append('<table><tr><th>Source</th><th>Destination</th><th></th></tr>')
+            for s in rows:
+                src_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(s["source"])}\')" '
+                           f'title="Copy source path">&#x1f4cb; Src</button>')
+                dst_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(s["dest"])}\')" '
+                           f'title="Copy destination path">&#x1f4cb; Dest</button>')
+                html.append(f'<tr><td style="font-size:0.8em;word-break:break-all">{_html_escape(s["source"])}</td>'
+                            f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(s["dest"])}</td>'
+                            f'<td style="white-space:nowrap">{src_btn} {dst_btn}</td></tr>')
+            html.append('</table>')
+
+        if self.skipped_dest:
+            html.append('<section><h2>Already in Destination</h2>')
+            _skip_table(self.skipped_dest, 'their content already exists in the output.')
+            html.append('</section>')
+
+        if self.skipped_intra:
+            html.append('<section><h2>Intra-run Duplicates</h2>')
+            _skip_table(self.skipped_intra, 'the source contained duplicate content; '
+                                            'only the first copy was imported.')
             html.append('</section>')
 
         # Duplicate groups
@@ -482,7 +539,7 @@ class DedupReport:
 
         html.append(_FOOTER)
         html.append('</body></html>')
-        (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
+        return "\n".join(html)
 
 
 def _fmt_bytes(n: int) -> str:
