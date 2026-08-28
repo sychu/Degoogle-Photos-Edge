@@ -2,6 +2,10 @@
 
 Unfuck the mess that Google Takeout makes of your photo library. Takes the dozens of chaotic zip archives, deduplicates, extracts dates, and organizes everything into clean `YYYY/MM/` folders with album symlinks and a browsable HTML report.
 
+## About this fork
+
+This is a fork of [couzteau/Degoogle-Photos](https://github.com/couzteau/Degoogle-Photos) with edge-case fixes applied on top (nested EXIF created-date, sidecar matching for `-edited`/`(N)` names, Live Photo sidecar inheritance, mislabeled `.heic`-as-video sniffing, rerun-safe resume) — which will hopefully be merged into the original repository.
+
 ## Why this exists
 
 **If you're not paying for the product, you are the product.**
@@ -30,9 +34,10 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 
 **Takeout migration mode** (default):
 - Scans multiple `Takeout*/Google Photos/` directories and builds a global index
-- Extracts the best date for each file (EXIF > JSON photoTakenTime > filename > JSON creationTime > file mtime)
+- Extracts the best date for each file (EXIF > JSON photoTakenTime > filename > JSON creationTime > parent dir year)
 - Deduplicates by MD5 hash + date (rounded to the minute)
 - Copies media files into `YYYY/MM/` folders, preserving JSON sidecars alongside
+  (`YYYY/unknown/` when only the year is known, `needs_review/` when nothing is)
 - Creates `Albums/` folder with relative symlinks for named albums
 - Generates a multi-page HTML report with thumbnails, metadata tooltips, and Finder links
 
@@ -49,28 +54,21 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 
 ## Installation
 
-[![PyPI](https://img.shields.io/pypi/v/degoogle-photos)](https://pypi.org/project/degoogle-photos/)
+This fork is not published on PyPI — install from the cloned GitHub repository:
 
-**Windows:**
 ```bash
-pip install degoogle-photos
+git clone https://github.com/sychu/Degoogle-Photos-Edge.git
+cd Degoogle-Photos-Edge
+pip install .
 ```
 
-**macOS / Linux:**
+That's it. Pillow (for EXIF extraction) is installed automatically. The `degoogle-photos` command is then available on your PATH.
+
+You can also run it straight from the clone without installing, using the module entry point:
+
 ```bash
-pip3 install degoogle-photos
+python3 -m degoogle_photos.cli --source /path/to/takeouts --output /path/to/organized
 ```
-
-That's it. Pillow (for EXIF extraction) is installed automatically.
-
-> **Why `pip3`?** Many macOS and Linux systems still have Python 2.7 as the default `pip`. If you see "No matching distribution found" or warnings about Python 2.7, that's why. `pip3` ensures you're using Python 3.
-
-> **Troubleshooting — macOS: `command not found: degoogle-photos`?** The package installed correctly, but pip placed the executable in a user-local directory that isn't on your PATH by default. Fix it by running:
-> ```bash
-> export PATH="$HOME/Library/Python/3.9/bin:$PATH"
-> degoogle-photos
-> ```
-> Replace `3.9` with your actual Python version (check with `python3 --version`). To make this permanent so it survives Terminal restarts, add the export line to your `~/.zshrc`.
 
 ## Usage
 
@@ -157,7 +155,7 @@ rsync -a --progress \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--source PATH [PATH ...]` | current directory | One or more source folders. For migration: root containing Takeout dirs. For `--dedup-scan`: any folders to scan. |
-| `--output PATH` | `./DeGoogled Photos` | Destination for organised photos or dedup output |
+| `--output PATH` | `./DeGoogle-Edge Photos` | Destination for organised photos or dedup output |
 | `--dry-run` | off | Report what would be done without copying any files |
 | `--dedup-scan` | off | Dedup mode: scan any folder(s) instead of running a Takeout migration |
 
@@ -166,8 +164,8 @@ rsync -a --progress \
 ### Takeout migration
 
 1. **Index** — Scan all Takeout directories, index media files and JSON sidecars by album
-2. **Match** — Link each media file to its JSON sidecar via title field or filename stripping
-3. **Date extraction** — Extract the best date using a priority cascade (EXIF > JSON > filename > mtime)
+2. **Match** — Link each media file to its JSON sidecar via title field or filename stripping. Videos without a sidecar inherit the same-stem Live Photo still's sidecar, and mislabeled `.heic`-named video files are detected by magic bytes and copied with their real `.mp4`/`.mov` name.
+3. **Date extraction** — Extract the best date using a priority cascade (EXIF > JSON > filename > parent dir year)
 4. **Deduplication** — Skip files with identical MD5 + date (within the same minute)
 5. **Copy** — Copy to `YYYY/MM/filename` with collision resolution (`_2`, `_3`, etc.)
 6. **Albums** — Create `Albums/<name>/` with relative symlinks to the copied files
@@ -186,6 +184,7 @@ rsync -a --progress \
 The report is written to `<output>/report/index.html` and includes:
 
 - Dashboard with copy/duplicate/error counts and date-source breakdown
+- "Attention needed" section surfacing files in `needs_review/` and `YYYY/unknown/`
 - Per-folder pages with image thumbnails in a responsive grid
 - Per-album pages for named albums (generic "Photos from YYYY" albums are excluded)
 - Hover tooltips showing EXIF data (camera, ISO, focal length, GPS) and JSON metadata (people, geo, description)
@@ -197,9 +196,10 @@ The report is written to `<output>/report/index.html` and includes:
 degoogle_photos/
   __init__.py          # Package version
   indexing.py          # Takeout directory scanning, JSON sidecar indexing, recursive file finder
-  dates.py             # Date extraction (EXIF, JSON, filename, mtime)
+  dates.py             # Date extraction (EXIF, JSON, filename, parent dir year)
   metadata.py          # Rich metadata extraction for report tooltips
   dedup.py             # MD5 hashing, deduplication keys, duplicate grouping
+  sniff.py             # Magic-byte detection for mislabeled .heic-as-video files
   copy.py              # File copying with collision resolution
   report.py            # HTML report generation (migration + dedup modes)
   logging_util.py      # Migration logging and progress reporting
@@ -240,7 +240,7 @@ After running degoogle-photos, create an API key in the Immich web UI (Account S
 
 ```bash
 immich login http://localhost:2283 YOUR-API-KEY
-immich upload --recursive /path/to/DeGoogled\ Photos
+immich upload --recursive "/path/to/DeGoogle-Edge Photos"
 ```
 
 Immich will pick up the dates and folder structure automatically.

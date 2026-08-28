@@ -7,6 +7,7 @@ from degoogle_photos.indexing import (
     find_takeout_dirs,
     build_index,
     _strip_sidecar_suffix,
+    _parse_sidecar_name,
     find_json_for_media,
     find_all_media_files,
 )
@@ -121,6 +122,264 @@ def test_find_json_for_media_prefix_match(tmp_path):
     media_file = [p for p, _ in media][0]
     result = find_json_for_media(media_file, "Album1", json_idx)
     assert result is not None
+
+
+def test_parse_sidecar_name_empty_base():
+    """Empty stripped bases are never returned (indices would get a garbage "" key)."""
+    assert _parse_sidecar_name(".json") is None
+    assert _strip_sidecar_suffix(".json") is None
+
+
+
+    assert _parse_sidecar_name("photo.jpg.json") == ("photo.jpg", None)
+    assert _parse_sidecar_name("photo.jpg.supplemental-metadata.json") == ("photo.jpg", None)
+    assert _parse_sidecar_name("IMG_0003.HEIC.supplemental-metadata(1).json") == ("IMG_0003.HEIC", "1")
+    assert _parse_sidecar_name("IMG_0003.HEIC.supplemental(2).json") == ("IMG_0003.HEIC", "2")
+    assert _parse_sidecar_name("IMG_0003.HEIC.sup(3).json") == ("IMG_0003.HEIC", "3")
+    assert _parse_sidecar_name("IMG_0003.HEIC(1).json") == ("IMG_0003.HEIC(1)", None)
+    assert _parse_sidecar_name("not_a_sidecar.txt") is None
+
+
+def test_build_index_dup_sidecar_matching(fake_takeout):
+    """Album with a photo and its (1) duplicate, each with its own sidecar."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album2"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_0003.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003(1).jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003.jpg.supplemental-metadata.json").write_text(
+        json.dumps({"title": "IMG_0003.jpg"}), encoding="utf-8"
+    )
+    (album_dir / "IMG_0003.jpg.supplemental-metadata(1).json").write_text(
+        json.dumps({"title": "IMG_0003(1).jpg"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    orig = [p for p, _ in media if p.name == "IMG_0003.jpg" and p.parent.name == "Album2"][0]
+    dup = [p for p, _ in media if p.name == "IMG_0003(1).jpg" and p.parent.name == "Album2"][0]
+
+    assert find_json_for_media(orig, "Album2", json_idx).name == "IMG_0003.jpg.supplemental-metadata.json"
+    assert find_json_for_media(dup, "Album2", json_idx).name == "IMG_0003.jpg.supplemental-metadata(1).json"
+
+
+def test_build_index_dup_sidecar_malformed(fake_takeout):
+    """Dup sidecar has no title, so only the strip/reconstruction path can match."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album2b"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_0003.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003(1).jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003.jpg.supplemental-metadata.json").write_text(
+        json.dumps({"title": "IMG_0003.jpg"}), encoding="utf-8"
+    )
+    (album_dir / "IMG_0003.jpg.supplemental-metadata(1).json").write_text(
+        "not json", encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    dup = [p for p, _ in media if p.name == "IMG_0003(1).jpg" and p.parent.name == "Album2b"][0]
+
+    assert find_json_for_media(dup, "Album2b", json_idx).name == "IMG_0003.jpg.supplemental-metadata(1).json"
+
+
+def test_build_index_edited_sidecar_inheritance(fake_takeout):
+    """An -edited file with no sidecar inherits the original's sidecar."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album3"
+    album_dir.mkdir(parents=True)
+    (album_dir / "img.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "img-edited.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "img.jpg.json").write_text(
+        json.dumps({"title": "img.jpg"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    edited = [p for p, _ in media if p.name == "img-edited.jpg" and p.parent.name == "Album3"][0]
+
+    assert find_json_for_media(edited, "Album3", json_idx).name == "img.jpg.json"
+
+
+def test_build_index_edited_own_sidecar_preferred(fake_takeout):
+    """An -edited file with its own sidecar prefers it over the original's."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album4"
+    album_dir.mkdir(parents=True)
+    (album_dir / "img.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "img-edited.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "img.jpg.json").write_text(
+        json.dumps({"title": "img.jpg"}), encoding="utf-8"
+    )
+    (album_dir / "img-edited.jpg.json").write_text(
+        json.dumps({"title": "img-edited.jpg"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    edited = [p for p, _ in media if p.name == "img-edited.jpg" and p.parent.name == "Album4"][0]
+
+    assert find_json_for_media(edited, "Album4", json_idx).name == "img-edited.jpg.json"
+
+
+def test_build_index_edited_uppercase(fake_takeout):
+    """The -edited fallback is case-insensitive (-EDITED)."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album5"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_5.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_5-EDITED.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_5.jpg.supplemental-metadata.json").write_text(
+        json.dumps({"title": "IMG_5.jpg"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    edited = [p for p, _ in media if p.name == "IMG_5-EDITED.jpg" and p.parent.name == "Album5"][0]
+
+    assert find_json_for_media(edited, "Album5", json_idx).name == "IMG_5.jpg.supplemental-metadata.json"
+
+
+def test_find_json_for_media_ambiguous_dup_form(fake_takeout):
+    """The plain "<base>(N).json" sidecar form matches its (N) media file."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album6"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_0003.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003(1).jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003(1).jpg.json").write_text(
+        "not json", encoding="utf-8"  # title unusable -> strip path
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    dup = [p for p, _ in media if p.name == "IMG_0003(1).jpg" and p.parent.name == "Album6"][0]
+
+    assert find_json_for_media(dup, "Album6", json_idx).name == "IMG_0003(1).jpg.json"
+
+
+def test_find_json_for_media_dup_fallback(fake_takeout):
+    """A (1)-renamed file falls back to the original's sidecar when no (1) sidecar exists."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "Album6"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_0003.jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003(1).jpg").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0003.jpg.supplemental-metadata.json").write_text(
+        json.dumps({"title": "IMG_0003.jpg"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, MEDIA_EXTENSIONS)
+    dup = [p for p, _ in media if p.name == "IMG_0003(1).jpg" and p.parent.name == "Album6"][0]
+
+    assert find_json_for_media(dup, "Album6", json_idx).name == "IMG_0003.jpg.supplemental-metadata.json"
+
+
+# ---------------------------------------------------------------------------
+# Live Photo pair inheritance
+# ---------------------------------------------------------------------------
+
+LIVE_MEDIA_EXTENSIONS = MEDIA_EXTENSIONS | {".heic"}
+
+
+def test_mp4_inherits_same_stem_heic_sidecar(fake_takeout):
+    """A Live Photo MP4 with no sidecar inherits the same-stem HEIC's sidecar."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "AlbumLP1"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_1234.HEIC").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.MP4").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.HEIC.json").write_text(
+        json.dumps({"title": "IMG_1234.HEIC"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, LIVE_MEDIA_EXTENSIONS)
+    mp4 = [p for p, _ in media if p.name == "IMG_1234.MP4" and p.parent.name == "AlbumLP1"][0]
+
+    assert find_json_for_media(mp4, "AlbumLP1", json_idx).name == "IMG_1234.HEIC.json"
+
+
+def test_mov_inherits_same_stem_jpeg_sidecar(fake_takeout):
+    """MOV videos also inherit, and JPEG stills work as the source."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "AlbumLP2"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_5678.JPEG").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_5678.MOV").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_5678.JPEG.supplemental-metadata.json").write_text(
+        json.dumps({"title": "IMG_5678.JPEG"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, LIVE_MEDIA_EXTENSIONS)
+    mov = [p for p, _ in media if p.name == "IMG_5678.MOV" and p.parent.name == "AlbumLP2"][0]
+
+    assert find_json_for_media(mov, "AlbumLP2", json_idx).name == "IMG_5678.JPEG.supplemental-metadata.json"
+
+
+def test_mp4_own_sidecar_wins_over_still_inheritance(fake_takeout):
+    """A video with its own sidecar prefers it over the same-stem still's."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "AlbumLP3"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_1234.HEIC").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.MP4").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.HEIC.json").write_text(
+        json.dumps({"title": "IMG_1234.HEIC"}), encoding="utf-8"
+    )
+    (album_dir / "IMG_1234.MP4.json").write_text(
+        json.dumps({"title": "IMG_1234.MP4"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, LIVE_MEDIA_EXTENSIONS)
+    mp4 = [p for p, _ in media if p.name == "IMG_1234.MP4" and p.parent.name == "AlbumLP3"][0]
+
+    assert find_json_for_media(mp4, "AlbumLP3", json_idx).name == "IMG_1234.MP4.json"
+
+
+def test_renamed_mp4_inherits_via_still(fake_takeout):
+    """A (1)-renamed video resolves via the plain still's sidecar."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "AlbumLP4"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_1234.HEIC").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234(1).MP4").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.HEIC.json").write_text(
+        json.dumps({"title": "IMG_1234.HEIC"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, LIVE_MEDIA_EXTENSIONS)
+    mp4 = [p for p, _ in media if p.name == "IMG_1234(1).MP4" and p.parent.name == "AlbumLP4"][0]
+
+    assert find_json_for_media(mp4, "AlbumLP4", json_idx).name == "IMG_1234.HEIC.json"
+
+
+def test_mp4_no_same_stem_still_returns_none(fake_takeout):
+    """Video with no same-stem still and no own sidecar finds nothing."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "AlbumLP5"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_9999.HEIC").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_0001.MP4").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_9999.HEIC.json").write_text(
+        json.dumps({"title": "IMG_9999.HEIC"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, LIVE_MEDIA_EXTENSIONS)
+    mp4 = [p for p, _ in media if p.name == "IMG_0001.MP4" and p.parent.name == "AlbumLP5"][0]
+
+    assert find_json_for_media(mp4, "AlbumLP5", json_idx) is None
+
+
+def test_stills_never_inherit_from_stills(fake_takeout):
+    """A HEIC with no sidecar must not inherit a same-stem JPG's sidecar."""
+    album_dir = fake_takeout / "Takeout1" / "Google Photos" / "AlbumLP6"
+    album_dir.mkdir(parents=True)
+    (album_dir / "IMG_1234.HEIC").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.JPG").write_bytes(b"\x00" * 20)
+    (album_dir / "IMG_1234.JPG.json").write_text(
+        json.dumps({"title": "IMG_1234.JPG"}), encoding="utf-8"
+    )
+
+    dirs = find_takeout_dirs(fake_takeout)
+    media, json_idx = build_index(dirs, LIVE_MEDIA_EXTENSIONS)
+    heic = [p for p, _ in media if p.name == "IMG_1234.HEIC" and p.parent.name == "AlbumLP6"][0]
+
+    assert find_json_for_media(heic, "AlbumLP6", json_idx) is None
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Date extraction from EXIF, JSON sidecars, filenames, and file mtimes."""
+"""Date extraction from EXIF, JSON sidecars, filenames, and parent directory names."""
 
 import json
 import re
@@ -15,6 +15,9 @@ FILENAME_DATE_PATTERNS = [
     # YYYYMMDD alone
     re.compile(r'(\d{4})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])'),
 ]
+
+# 4-digit year in a parent directory name (e.g. "Photos from 2015")
+_PARENT_DIR_YEAR_RE = re.compile(r'(?<!\d)((?:19|20)\d{2})(?!\d)')
 
 
 def extract_date(
@@ -51,12 +54,17 @@ def extract_date(
         if dt:
             return dt, "json_created"
 
-    # 5. File mtime
-    dt = _date_from_mtime(media_path)
-    if dt:
-        return dt, "mtime"
+    # 5. Parent directory year
+    year = _year_from_parent_dir(media_path)
+    if year:
+        return datetime(year, 1, 1), "parent_dir"
 
     return None, "none"
+
+
+EXIF_SUB_IFD_TAG = 0x8769
+EXIF_DATETIME_TAGS = (36867, 36868, 306)  # DTO, Digitized, DateTime
+EXIF_DATE_FORMAT = "%Y:%m:%d %H:%M:%S"
 
 
 def _date_from_exif(media_path: Path) -> Optional[datetime]:
@@ -66,20 +74,36 @@ def _date_from_exif(media_path: Path) -> Optional[datetime]:
         return None
     try:
         from PIL import Image
-        img = Image.open(media_path)
-        exif = img.getexif()
-        if not exif:
-            return None
-        # DateTimeOriginal = 36867, DateTimeDigitized = 36868, DateTime = 306
-        for tag_id in (36867, 36868, 306):
-            val = exif.get(tag_id)
-            if val:
-                # Format: "YYYY:MM:DD HH:MM:SS"
-                dt = datetime.strptime(val, "%Y:%m:%d %H:%M:%S")
-                if dt.year >= 1970:
-                    return dt
+        with Image.open(media_path) as img:
+            exif = img.getexif()
     except Exception:
-        pass
+        return None
+    if not exif:
+        return None
+    return _parse_first_datetime(_exif_datetime_tags(exif))
+
+
+def _exif_datetime_tags(exif) -> list:
+    """Candidate values: nested sub-IFD first, flat fallback."""
+    candidates = []
+    for tag_id in EXIF_DATETIME_TAGS:
+        val = exif.get_ifd(EXIF_SUB_IFD_TAG).get(tag_id) or exif.get(tag_id)
+        if val:
+            candidates.append(val)
+    return candidates
+
+
+def _parse_first_datetime(values) -> Optional[datetime]:
+    for val in values:
+        try:
+            # Strip null/space padding: EXIF ASCII fields are fixed-width and
+            # often padded, which would otherwise make strptime reject the value.
+            val = val.strip("\x00").strip()
+            dt = datetime.strptime(val, EXIF_DATE_FORMAT)
+            if dt.year >= 1970:
+                return dt
+        except (ValueError, TypeError):
+            continue
     return None
 
 
@@ -122,13 +146,15 @@ def _date_from_filename(
     return None
 
 
-def _date_from_mtime(media_path: Path) -> Optional[datetime]:
-    """Get date from file modification time."""
-    try:
-        mtime = media_path.stat().st_mtime
-        dt = datetime.fromtimestamp(mtime)
-        if dt.year >= 1970:
-            return dt
-    except Exception:
-        pass
+def _year_from_parent_dir(media_path: Path) -> Optional[int]:
+    """Extract a 4-digit year from the immediate parent directory name.
+
+    Covers Takeout's `Google Photos/Photos from 2015/IMG.jpg` layout.
+    """
+    m = _PARENT_DIR_YEAR_RE.search(media_path.parent.name)
+    if not m:
+        return None
+    year = int(m.group(1))
+    if 1970 <= year <= 2030:
+        return year
     return None
