@@ -6,7 +6,9 @@ import shutil
 import time
 import webbrowser
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from .indexing import find_takeout_dirs, build_index, find_json_for_media, find_all_media_files
 from .dates import extract_date
@@ -236,8 +238,9 @@ def main():
     log.total = len(media_files)
     log.html.total = len(media_files)
 
-    # Album tracking: album_name -> [dest_path, ...]
-    album_files = defaultdict(list)  # type: dict[str, list[Path]]
+    # Album tracking: album_name -> [(dest_path, dt), ...]; dt is None for
+    # needs_review and year-only (parent-dir) dates, too imprecise for a prefix.
+    album_files: dict[str, list[tuple[Path, Optional[datetime]]]] = defaultdict(list)
 
     # Phase 2-4: Process each media file
     print(f"\nPhase 2-4: Processing files{' (dry run)' if dry_run else ''}...")
@@ -250,6 +253,10 @@ def main():
 
             # Extract date
             dt, date_source = extract_date(media_path, json_path)
+
+            # Year-only dates (parent dir) are too imprecise to prefix an album
+            # name, so they only contribute when a full date is known.
+            prefix_dt = dt if date_source != "parent_dir" else None
 
             # Extract rich metadata for report tooltips
             metadata = extract_metadata(media_path, json_path)
@@ -273,7 +280,7 @@ def main():
                 log.log(f"SKIP_RESUME: {media_path} -> {dest_path}")
                 log.html.add_copied(dest_path, media_path, dt, date_source,
                                     album_name, json_path is not None, metadata)
-                album_files[album_name].append(dest_path)
+                album_files[album_name].append((dest_path, prefix_dt))
                 log.progress(i, log.total)
                 continue
 
@@ -298,12 +305,12 @@ def main():
                     log.log(f"REVIEW: {media_path} -> {actual_dest}")
                     log.html.add_copied(actual_dest, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
-                    album_files[album_name].append(actual_dest)
+                    album_files[album_name].append((actual_dest, prefix_dt))
                 else:
                     log.log(f"REVIEW: {media_path} -> {dest_path}")
                     log.html.add_copied(dest_path, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
-                    album_files[album_name].append(dest_path)
+                    album_files[album_name].append((dest_path, prefix_dt))
             else:
                 # Normal copy
                 if not dry_run:
@@ -311,12 +318,12 @@ def main():
                     log.log(f"COPY: {media_path} -> {actual_dest} (date={dt})")
                     log.html.add_copied(actual_dest, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
-                    album_files[album_name].append(actual_dest)
+                    album_files[album_name].append((actual_dest, prefix_dt))
                 else:
                     log.log(f"COPY: {media_path} -> {dest_path} (date={dt})")
                     log.html.add_copied(dest_path, media_path, dt, date_source,
                                         album_name, json_path is not None, metadata)
-                    album_files[album_name].append(dest_path)
+                    album_files[album_name].append((dest_path, prefix_dt))
                 log.copied += 1
 
         except Exception as e:

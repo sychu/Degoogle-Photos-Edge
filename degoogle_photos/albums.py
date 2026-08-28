@@ -2,14 +2,57 @@
 
 import os
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .logging_util import MigrationLog
 
 # Generic album names that Google auto-creates — not real user albums
 _GENERIC_ALBUM_RE = re.compile(r'^(Photos from \d{4}|Untitled\(\d+\))$', re.IGNORECASE)
+
+# Leading year-first date in an album name, anchored at the start and followed
+# by whitespace or the end of the name (separated or compact YYYYMMDD forms).
+_LEADING_YEAR_FIRST_DATE_RE = re.compile(
+    r'^(?P<date>(?:19|20)\d{2}[-/._]\d{1,2}[-/._]\d{1,2}|(?:19|20)\d{2}\d{2}\d{2})'
+    r'(?=\s|$)(?P<rest>.*)$'
+)
+
+
+def _normalize_leading_date(name: str) -> Optional[str]:
+    """Normalise a leading year-first date in an album name to YYYY-MM-DD.
+
+    Returns the name with the date normalised, or None if the name does not
+    start with a recognised, valid calendar date.
+    """
+    m = _LEADING_YEAR_FIRST_DATE_RE.match(name)
+    if not m:
+        return None
+    date_part = m.group("date")
+    if re.search(r'[-/._]', date_part):
+        year, month, day = (int(part) for part in re.split(r'[-/._]', date_part))
+    else:
+        year, month, day = int(date_part[0:4]), int(date_part[4:6]), int(date_part[6:8])
+    try:
+        # Raises for months > 12 and impossible days (e.g. Feb 30)
+        datetime(year, month, day)
+    except ValueError:
+        return None
+    formatted = f"{year:04d}-{month:02d}-{day:02d}"
+    rest = m.group("rest").strip()
+    return f"{formatted} {rest}" if rest else formatted
+
+
+def _format_album_name(album_name: str, oldest_dt: Optional[datetime]) -> str:
+    """Return the album folder name, prefixed with its oldest file's date if needed."""
+    normalized = _normalize_leading_date(album_name)
+    if normalized is not None:
+        return normalized
+    if oldest_dt is not None:
+        return f"{oldest_dt:%Y-%m-%d} {album_name}"
+    return album_name
 
 
 def create_album_symlinks(
@@ -32,16 +75,50 @@ def create_album_symlinks(
     skip_count = 0
 
     for album_name, dest_paths in sorted(real_albums.items()):
+        # Items are either a Path (no date info — backward compatible) or a
+        # (Path, dt) tuple. Derive the oldest dated file for the name prefix.
+        oldest_dt = None
+        resolved_paths = []
+        for item in dest_paths:
+            if isinstance(item, tuple):
+                dest_path, dt = item
+                if dt is not None and (oldest_dt is None or dt < oldest_dt):
+                    oldest_dt = dt
+            else:
+                dest_path = item
+            resolved_paths.append(dest_path)
+
         # Sanitize album name for filesystem
-        safe_name = album_name.replace("/", "-").replace(":", "-").strip()
+        safe_name = _format_album_name(album_name, oldest_dt)
+        safe_name = safe_name.replace("/", "-").replace(":", "-").strip()
         if not safe_name:
             continue
         album_dir = albums_dir / safe_name
 
         if not dry_run:
             album_dir.mkdir(parents=True, exist_ok=True)
+            # Remove a legacy folder left by an earlier run under the album's
+            # original (unprefixed or differently formatted) name, so reruns do
+            # not accumulate duplicate folders. Only folders whose entries are
+            # all symlinks are removed — anything else is left in place to avoid
+            # deleting user data.
+            legacy_name = album_name.replace("/", "-").replace(":", "-").strip()
+            if legacy_name and legacy_name != safe_name:
+                legacy_dir = albums_dir / legacy_name
+                if legacy_dir.is_dir() and not legacy_dir.is_symlink():
+                    try:
+                        entries = list(legacy_dir.iterdir())
+                    except OSError as e:
+                        log.log(f"ALBUM_STALE_ERROR: {legacy_dir.name} -- {e}")
+                    else:
+                        if all(entry.is_symlink() for entry in entries):
+                            shutil.rmtree(legacy_dir)
+                            log.log(f"ALBUM_RENAME: {legacy_dir.name} -> {safe_name}")
+                        else:
+                            log.log(f"ALBUM_STALE: {legacy_dir.name} left in place "
+                                    f"(contains non-symlink entries)")
 
-        for dest_path in dest_paths:
+        for dest_path in resolved_paths:
             link_path = album_dir / dest_path.name
             if link_path.exists() or link_path.is_symlink():
                 skip_count += 1
