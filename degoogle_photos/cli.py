@@ -24,7 +24,7 @@ from .copy import (
 )
 from .sniff import effective_media_name
 from .albums import create_album_symlinks
-from .logging_util import MigrationLog
+from .logging_util import MigrationLog, ProgressBar
 from .report import DedupReport, ImportReport
 
 # ---------------------------------------------------------------------------
@@ -244,11 +244,15 @@ def _run_import(args):
             if not f.is_symlink()
         ]
         if existing_files:
+            bar = ProgressBar(max(1, len(existing_files) // 200))
             try:
-                existing_md5s = set(hash_files(existing_files).values())
+                existing_md5s = set(
+                    hash_files(existing_files, progress_cb=bar.update).values()
+                )
             except Exception as e:
                 print(f"\nERROR hashing destination: {e}")
                 raise SystemExit(1)
+            bar.finish()
         print(f"  {len(existing_md5s)} existing media files hashed")
 
     # Phase 1: Find all media files across all source roots
@@ -264,25 +268,17 @@ def _run_import(args):
 
     # Phase 2: Compute MD5s
     print(f"\nPhase 2: Computing checksums...")
-    progress_interval = max(1, len(all_files) // 200)
-
-    def _progress(current, total):
-        report.scanned = current
-        if current % progress_interval == 0 or current == total:
-            elapsed = time.time() - start
-            rate = current / elapsed if elapsed > 0 else 0
-            pct = current / total * 100 if total > 0 else 0
-            print(
-                f"\r  {current}/{total} ({pct:.1f}%) | {rate:.0f} files/sec",
-                end="", flush=True,
-            )
+    bar = ProgressBar(
+        max(1, len(all_files) // 200),
+        on_update=lambda c, t: setattr(report, "scanned", c),
+    )
 
     try:
-        file_md5 = hash_files(all_files, progress_cb=_progress)
+        file_md5 = hash_files(all_files, progress_cb=bar.update)
     except Exception as e:
         print(f"\nERROR during scan: {e}")
         raise SystemExit(1)
-    print()
+    bar.finish()
 
     # Phase 3: Copy new files and skip ones already in the destination.
     # Directory-based aliases are keyed by the source's immediate parent dir.
@@ -294,7 +290,11 @@ def _run_import(args):
     skipped_intra = 0
     errors = 0
     run_md5_to_dest = {}  # md5 -> dest of files copied during this run
-    copy_interval = max(1, len(all_files) // 200)
+    copy_bar = ProgressBar(
+        max(1, len(all_files) // 200),
+        stats=lambda: f"copied={copied} skip-dest={skipped_dest} "
+                      f"skip-intra={skipped_intra} errors={errors}",
+    )
 
     for i, src in enumerate(all_files, 1):
         dt, date_source = extract_date(src, None)
@@ -338,11 +338,9 @@ def _run_import(args):
                 report.add_error(src, msg)
                 errors += 1
 
-        if i % copy_interval == 0 or i == len(all_files):
-            pct = i / len(all_files) * 100 if all_files else 0
-            print(f"\r  {i}/{len(all_files)} ({pct:.1f}%)", end="", flush=True)
+        copy_bar.update(i, len(all_files))
 
-    print()
+    copy_bar.finish()
     report.copied = copied
 
     # Phase 4: Create ImportedAlbums/<parent-dir>/ symlinks (no by-folder/ mirror)

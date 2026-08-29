@@ -7,6 +7,44 @@ from pathlib import Path
 from .report import HtmlReport
 
 
+class ProgressBar:
+    """Reusable carriage-return progress bar with per-tick printing.
+
+    Prints `current/total (pct%) | rate files/sec` on the last line, plus an
+    optional `stats` counter string, on every tick multiple and at completion.
+    """
+
+    def __init__(self, tick: int, prefix: str = "  ", stats=None, on_update=None):
+        self.tick = tick
+        self.prefix = prefix
+        self.stats = stats
+        self.on_update = on_update
+        self._start = time.time()
+        self._last_len = 0
+
+    def update(self, current: int, total: int):
+        """Advance the bar; runs the on_update hook and prints at tick multiples."""
+        if self.on_update:
+            self.on_update(current, total)
+        if current % self.tick == 0 or current == total:
+            elapsed = time.time() - self._start
+            rate = current / elapsed if elapsed > 0 else 0
+            pct = current / total * 100 if total > 0 else 0
+            line = (
+                f"\r{self.prefix}{current}/{total} ({pct:.1f}%) "
+                f"| {rate:.0f} files/sec"
+            )
+            if self.stats:
+                line += f" | {self.stats()}"
+            line = line.ljust(self._last_len)
+            self._last_len = len(line)
+            print(line, end="", flush=True)
+
+    def finish(self):
+        """Close the bar with a trailing newline."""
+        print()
+
+
 class MigrationLog:
     """Handles logging to file and console progress."""
 
