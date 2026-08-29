@@ -423,3 +423,48 @@ def test_import_report_browsable(tmp_path):
     assert "IMG_20200101_120000.jpg" in folder_html
     album_html = (run_dir / "album_foldera.html").read_text(encoding="utf-8")
     assert "IMG_20200101_120000.jpg" in album_html
+
+
+def test_run_report_lists_imported_and_skipped_files(tmp_path):
+    """The run page must make clear which files were imported and which skipped."""
+    src = tmp_path / "source"
+    (src / "folderA").mkdir(parents=True)
+    (src / "folderA" / "matched_20200101_120000.jpg").write_bytes(b"aaa")
+    (src / "folderA" / "skipped_20200102_090000.jpg").write_bytes(b"bbb")
+
+    out = tmp_path / "output"
+    (out / "2020" / "01").mkdir(parents=True)
+    (out / "2020" / "01" / "skipped_20200102_090000.jpg").write_bytes(b"bbb")
+
+    _run_import(make_args(src, out))
+
+    html = import_run_html(out)
+    # Matched files are listed under their own heading with source + dest.
+    assert "New Files Imported" in html
+    assert "matched_20200101_120000.jpg" in html
+    # Skipped files stay under the skip heading.
+    assert "Already in Destination" in html
+    assert "skipped_20200102_090000.jpg" in html
+
+
+def test_runs_listing_matches_report_style(tmp_path):
+    src = tmp_path / "source"
+    (src / "folderA").mkdir(parents=True)
+    (src / "folderA" / "IMG_20200101_120000.jpg").write_bytes(b"aaa")
+
+    out = tmp_path / "output"
+    _run_import(make_args(src, out))
+    _run_import(make_args(src, out))
+
+    listing = (out / "report-import" / "index.html").read_text(encoding="utf-8")
+    # Styled like the rest of the reports (summary grid + generated line).
+    assert 'class="summary"' in listing
+    assert 'class="stat-grid"' in listing
+    assert "Import runs" in listing
+    assert "Generated:" in listing
+    # The listing references a style.css that lives next to it (not one level down).
+    assert (out / "report-import" / "style.css").exists()
+    # Both runs are listed, newest first.
+    runs = sorted(d.name for d in (out / "report-import").iterdir()
+                  if d.is_dir() and d.name.startswith("import-"))
+    assert listing.index(f"{runs[-1]}/index.html") < listing.index(f"{runs[0]}/index.html")

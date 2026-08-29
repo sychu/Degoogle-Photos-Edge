@@ -602,6 +602,7 @@ class ImportReport(HtmlReport):
     def _write_runs_index(self):
         """Regenerate report-import/index.html listing all run dirs, newest first."""
         self.report_dir.mkdir(parents=True, exist_ok=True)
+        self._write_css()
         run_dirs = sorted(
             (d for d in self.report_dir.iterdir()
              if d.is_dir() and d.name.startswith("import-")
@@ -609,16 +610,29 @@ class ImportReport(HtmlReport):
             key=lambda d: d.name, reverse=True,
         )
         html = [self._page_head("Dedup-import Reports")]
-        html.append('<header><h1>Dedup-import Reports</h1></header>')
+        html.append('<header><h1>Dedup-import Reports</h1>')
+        html.append(f'<p class="updated">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                    f' &mdash; {len(run_dirs)} run(s)</p></header>')
+        html.append('<section class="summary"><h2>Summary</h2><div class="stat-grid">')
+        html.append(f'<div class="stat"><span class="num">{len(run_dirs)}</span>'
+                    f'<span class="label">Import runs</span></div>')
+        if run_dirs:
+            html.append(f'<div class="stat"><span class="num"><a href="{run_dirs[0].name}/index.html">'
+                        f'{len(run_dirs)}</a></span><span class="label">Newest run</span></div>')
+        html.append('</div></section>')
         if not run_dirs:
             html.append('<p>No import runs yet.</p>')
         else:
-            html.append('<table><tr><th>Run</th><th>Report</th></tr>')
+            html.append('<section><h2>Runs</h2><table><tr><th>Run</th><th>Report</th></tr>')
             for d in run_dirs:
                 stamp = d.name[len("import-"):]
-                html.append(f'<tr><td>{_html_escape(stamp)}</td>'
-                            f'<td><a href="{d.name}/index.html">Open report</a></td></tr>')
-            html.append('</table>')
+                try:
+                    pretty = datetime.strptime(stamp, "%Y%m%d-%H%M%S-%f").strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    pretty = stamp
+                html.append(f'<tr><td>{_html_escape(pretty)}</td>'
+                            f'<td><a class="finder-btn" href="{d.name}/index.html">Open report</a></td></tr>')
+            html.append('</table></section>')
         html.append(_FOOTER)
         html.append('</body></html>')
         (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
@@ -632,6 +646,24 @@ class ImportReport(HtmlReport):
                         f'<span class="label">Intra-run duplicates</span></div>')
 
     def _extra_sections(self, html: list):
+        imported = [f for files in self.files_by_folder.values() for f in files]
+        if imported:
+            html.append('<section><h2>New Files Imported</h2>')
+            html.append(f'<p>{len(imported)} source files were copied into the library.</p>')
+            html.append('<table><tr><th>Source</th><th>Destination</th><th>Album</th><th></th></tr>')
+            for f in imported:
+                src_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(f["source"])}\')" '
+                           f'title="Copy source path">&#x1f4cb; Src</button>')
+                dst_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(f["dest"])}\')" '
+                           f'title="Copy destination path">&#x1f4cb; Dest</button>')
+                html.append(f'<tr><td style="font-size:0.8em;word-break:break-all">{_html_escape(f["source"])}</td>'
+                            f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(f["dest"])}</td>'
+                            f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(f["album"])}</td>'
+                            f'<td style="white-space:nowrap">{src_btn} {dst_btn}</td></tr>')
+            html.append('</table></section>')
+
         if self.skipped_dest:
             html.append('<section><h2>Already in Destination</h2>')
             self._skip_table(html, self.skipped_dest,
