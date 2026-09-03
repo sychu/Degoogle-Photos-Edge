@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .exiftool_util import PILLOW_EXIF_EXTENSIONS, date_from_exiftool
+
 # Regex patterns for extracting dates from filenames
 FILENAME_DATE_PATTERNS = [
     # YYYYMMDD_HHMMSS (most common: IMG_20200510_204759)
@@ -31,10 +33,18 @@ def extract_date(
     """
     patterns = filename_date_patterns if filename_date_patterns is not None else FILENAME_DATE_PATTERNS
 
-    # 1. EXIF
+    # 1. EXIF (Pillow for the formats it reads)
     dt = _date_from_exif(media_path)
     if dt:
         return dt, "exif"
+
+    # 1b. Embedded dates via exiftool (videos, RAW, HEIC — anything Pillow
+    #     cannot read). Only for extensions outside the Pillow set, so the
+    #     hot path never spawns the subprocess round-trip.
+    if media_path.suffix.lower() not in PILLOW_EXIF_EXTENSIONS:
+        dt = date_from_exiftool(media_path)
+        if dt:
+            return dt, "exiftool"
 
     # 2. JSON photoTakenTime
     json_data = _load_json(json_path) if json_path else None

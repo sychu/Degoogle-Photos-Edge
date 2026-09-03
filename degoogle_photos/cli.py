@@ -26,6 +26,8 @@ from .sniff import effective_media_name
 from .albums import create_album_symlinks
 from .logging_util import MigrationLog, ProgressBar
 from .report import DedupReport, ImportReport
+from .media import RAW_EXTENSIONS, is_raw_file
+from .exiftool_util import shutdown as exiftool_shutdown
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -34,7 +36,7 @@ from .report import DedupReport, ImportReport
 MEDIA_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".bmp", ".tiff", ".tif",
     ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg",
-}
+} | RAW_EXTENSIONS
 
 PROGRESS_INTERVAL = 500
 
@@ -113,6 +115,7 @@ def _run_dedup(args):
     unique_files = [f for f in files if f not in skipped_paths]
     copied = 0
     errors = 0
+    raw_count = 0
     copy_interval = max(1, unique_count // 200)
     src_to_dest = {}  # track actual dest for symlink phase
 
@@ -128,6 +131,9 @@ def _run_dedup(args):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
             src_to_dest[src] = dest
+            if is_raw_file(dest.name):
+                raw_count += 1
+                report.add_raw(src, dest)
             if date_source in ("parent_dir", "none"):
                 report.add_attention(src, dest, date_source)
             copied += 1
@@ -182,6 +188,8 @@ def _run_dedup(args):
     print(f"Duplicates skipped:  {dupe_file_count}")
     print(f"Unique files copied: {copied}")
     print(f"Folder aliases:      {link_count}")
+    if raw_count:
+        print(f"RAW files:           {raw_count}")
     if errors:
         print(f"Errors:              {errors}")
     print(f"Time elapsed:        {elapsed:.1f}s")
@@ -194,6 +202,7 @@ def _run_dedup(args):
     print(f"Report:       {report_index.resolve()}")
     if report_index.exists():
         webbrowser.open(report_index.resolve().as_uri())
+    exiftool_shutdown()
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -374,6 +383,7 @@ def _run_import(args):
     print(f"Report:           {report_index} (this run: {report.run_dir.name}/index.html)")
     if report_index.exists():
         webbrowser.open(report_index.resolve().as_uri())
+    exiftool_shutdown()
 
 
 def main():
@@ -531,6 +541,7 @@ def main():
     # Phase 6: Write reports
     log.write_logs()
     log.html.finish_run()
+    exiftool_shutdown()
 
 
 if __name__ == "__main__":

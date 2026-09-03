@@ -5,6 +5,7 @@ import webbrowser
 from pathlib import Path
 
 from .report import HtmlReport
+from .media import is_raw_file
 
 
 class ProgressBar:
@@ -67,7 +68,7 @@ class MigrationLog:
         self._log_lines.append(msg)
 
     def log_review(self, media_path: Path, reason: str):
-        self._review_lines.append(f"{media_path}  -- {reason}")
+        self._review_lines.append((media_path, reason))
 
     def progress(self, current: int, total: int):
         self.html.processed = current
@@ -93,6 +94,7 @@ class MigrationLog:
         self.html._write()
         print(f"\nHTML report: {self.html.report_dir / 'index.html'}")
 
+        raw_total = self.html._raw_total()
         summary = (
             f"\n{'='*60}\n"
             f"{prefix}Migration Summary\n"
@@ -102,6 +104,10 @@ class MigrationLog:
             f"Skipped (duplicates):     {self.skipped_dupes}\n"
             f"Skipped (already copied): {self.skipped_resume}\n"
             f"Needs review:             {self.needs_review}\n"
+        )
+        if raw_total:
+            summary += f"RAW files:                {raw_total}\n"
+        summary += (
             f"Errors:                   {self.errors}\n"
             f"Time elapsed:             {elapsed:.1f}s\n"
             f"{'='*60}\n"
@@ -129,9 +135,23 @@ class MigrationLog:
                 with open(readme, "w", encoding="utf-8") as f:
                     f.write("Files placed here could not be assigned a date.\n")
                     f.write("Review manually and move to the correct YYYY/MM/ folder.\n\n")
-                    for line in self._review_lines:
-                        f.write(line + "\n")
+                    for media_path, reason in self._review_lines:
+                        if not is_raw_file(media_path):
+                            f.write(f"{media_path}  -- {reason}\n")
                 print(f"Review log written to: {readme}")
+
+                # RAW review entries get their own README in the Raw/ tree.
+                raw_review = [line for line in self._review_lines if is_raw_file(line[0])]
+                if raw_review:
+                    raw_dir = self.output_root / "Raw" / "Needs Review"
+                    raw_dir.mkdir(parents=True, exist_ok=True)
+                    raw_readme = raw_dir / "README.txt"
+                    with open(raw_readme, "w", encoding="utf-8") as f:
+                        f.write("RAW files placed here could not be assigned a date.\n")
+                        f.write("Review manually and move to the correct Raw/YYYY/MM/ folder.\n\n")
+                        for media_path, reason in raw_review:
+                            f.write(f"{media_path}  -- {reason}\n")
+                    print(f"RAW review log written to: {raw_readme}")
         else:
             print("(Dry run — no files written)")
 

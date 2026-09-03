@@ -34,16 +34,20 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 
 **Takeout migration mode** (default):
 - Scans multiple `Takeout*/Google Photos/` directories and builds a global index
-- Extracts the best date for each file (EXIF > JSON photoTakenTime > filename > JSON creationTime > parent dir year)
+- Extracts the best date for each file (EXIF/embedded > JSON photoTakenTime > filename > JSON creationTime > parent dir year)
 - Deduplicates by MD5 hash + date (rounded to the minute)
 - Copies media files into `YYYY/MM/` folders, preserving JSON sidecars alongside
   (`YYYY/unknown/` when only the year is known, `Needs Review/` when nothing is)
+- RAW camera files (`.CR2`, `.NEF`, `.ARW`, `.DNG`, …) are kept in a separate
+  `Raw/` tree with the same date rules (`Raw/YYYY/MM/`, `Raw/YYYY/unknown/`,
+  `Raw/Needs Review/`) so they never mix into the regular media folders
 - Creates `Google Albums/` folder with relative symlinks for named albums
 - Generates a multi-page HTML report with thumbnails, metadata tooltips, and Finder links
 
 **Dedup mode** (`--dedup-scan`):
 - Scans any folder and its subdirectories for duplicate media files
 - Copies one unique file per duplicate group into a date-organised `YYYY/MM/` structure
+- RAW files are copied into the separate `Raw/` tree
 - Recreates the original folder tree under `by-folder/` as symlinks pointing at the date-organised files
 - The source folder is never modified
 
@@ -51,6 +55,7 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 - Merges an unorganised backup (old drive, no Takeout/JSON structure) into an already-organised library
 - Skips any source file whose content (MD5) already exists in `--output`, so pre-existing photos are never re-copied or renamed with a `_2` suffix
 - Copies new files into the existing `YYYY/MM/` structure using the same date cascade and collision resolution as dedup mode
+- RAW files are copied into the separate `Raw/` tree (and a RAW file already in `Raw/` in the output is destination-skipped)
 - Creates `Imported Albums/<parent-dir>/` symlink aliases (no `by-folder/` mirror)
 
 ## Prerequisites
@@ -126,6 +131,9 @@ output/
   2019/07/IMG_001.jpg        ← unique file, date-organised
   2020/03/VID_001.mp4
   Needs Review/IMG_nodate.jpg
+  Raw/                       ← RAW camera files, kept in a detached tree
+    2019/08/DSC_002.NEF      ← full date known
+    2014/unknown/CANON_003.CR2
   by-folder/                 ← original folder tree as symlinks
     vacation 2019/
       IMG_001.jpg  →  ../../2019/07/IMG_001.jpg
@@ -184,6 +192,8 @@ DeGoogle Photos/
   2019/07/IMG_001.jpg                 ← already present, skipped by hash
   2020/03/VID_new.mp4                 ← newly copied from the old drive
   Needs Review/IMG_nodate.jpg
+  Raw/                                ← RAW camera files (detached tree)
+    2020/04/DSC_new.NEF               ← newly copied RAW
   Imported Albums/                    ← aliases keyed by source parent dir
     vacation/
       VID_new.mp4  →  ../../2020/03/VID_new.mp4
@@ -194,6 +204,31 @@ DeGoogle Photos/
 ```
 
 The destination is scanned for existing files on every run (nothing is cached on disk), so reruns are safe and idempotent. New files whose name already exists in the output (different content) are renamed with a `_2`, `_3` suffix — existing files are never overwritten. Each import gets its own browsable report (date folders + album pages, same layout as the migration report) under `Reports/Import Reports/import-<timestamp>/`; `Reports/Import Reports/index.html` links all runs, and the migration report under `Reports/DeGoogle Reports/` is never touched.
+
+### RAW camera files
+
+RAW camera formats are supported in all three modes. They are matched by
+extension and processed exactly like other media (date cascade, MD5 dedup,
+collision resolution, JSON sidecars, sniffed names) — but they are always
+written to a **separate detached `Raw/` tree** so they never mix into the
+regular `YYYY/MM/` media folders (user-confirmed design: RAW lives beside the
+structured library, not inside it).
+
+| Case | Destination |
+|------|-------------|
+| Full date known | `Raw/YYYY/MM/file` |
+| Only parent-dir year known | `Raw/YYYY/unknown/file` |
+| No date found | `Raw/Needs Review/file` |
+
+Recognised extensions: `CRW CR2 CR3 NEF NRW ARW SR2 SRF RAF ORF RW2 RWL PEF PTX
+DNG RAW X3F 3FR FFF IIQ CAP MOS MEF KDC DCR KC2 MRW MDC ERF SRW BAY GPR ARI
+RWZ` (matched case-insensitively). RAW files participate in album/alias
+symlinks (`Google Albums/`, `Imported Albums/`, `by-folder/`) — the link
+targets simply point into `Raw/…`. Every report shows a separate RAW section
+whenever at least one RAW file was spotted.
+
+Without the optional `exiftool` binary, RAW files with no JSON sidecar and no
+date in the filename fall back to `Raw/Needs Review/` exactly as before.
 
 ### All options
 
@@ -211,7 +246,7 @@ The destination is scanned for existing files on every run (nothing is cached on
 
 1. **Index** — Scan all Takeout directories, index media files and JSON sidecars by album
 2. **Match** — Link each media file to its JSON sidecar via title field or filename stripping. Videos without a sidecar inherit the same-stem Live Photo still's sidecar, and mislabeled `.heic`-named video files are detected by magic bytes and copied with their real `.mp4`/`.mov` name.
-3. **Date extraction** — Extract the best date using a priority cascade (EXIF > JSON > filename > parent dir year)
+3. **Date extraction** — Extract the best date using a priority cascade (EXIF/embedded > JSON photoTakenTime > filename > JSON creationTime > parent dir year). Pillow handles photos; the `exiftool` binary covers videos, RAW, and HEIC when present.
 4. **Deduplication** — Skip files with identical MD5 + date (within the same minute)
 5. **Copy** — Copy to `YYYY/MM/filename` with collision resolution (`_2`, `_3`, etc.)
 6. **Albums** — Create `Google Albums/<name>/` with relative symlinks to the copied files
@@ -239,6 +274,7 @@ The migration report includes:
 
 - Dashboard with copy/duplicate/error counts and date-source breakdown
 - "Attention needed" section surfacing files in `Needs Review/` and `YYYY/unknown/`
+- "RAW Files" section (only when RAW files were spotted), linking to the `Raw/…` folder pages
 - Per-folder pages with image thumbnails in a responsive grid
 - Per-album pages for named albums (generic "Photos from YYYY" albums are excluded)
 - Hover tooltips showing EXIF data (camera, ISO, focal length, GPS) and JSON metadata (people, geo, description)
@@ -250,11 +286,13 @@ The migration report includes:
 degoogle_photos/
   __init__.py          # Package version
   indexing.py          # Takeout directory scanning, JSON sidecar indexing, recursive file finder
-  dates.py             # Date extraction (EXIF, JSON, filename, parent dir year)
+  dates.py             # Date extraction (EXIF/embedded, JSON, filename, parent dir year)
   metadata.py          # Rich metadata extraction for report tooltips
+  media.py             # RAW extension set + is_raw_file classification
+  exiftool_util.py     # Optional exiftool fallback (embedded dates/metadata)
   dedup.py             # MD5 hashing, deduplication keys, duplicate grouping
   sniff.py             # Magic-byte detection for mislabeled .heic-as-video files
-  copy.py              # File copying with collision resolution
+  copy.py              # File copying with collision resolution (+ Raw/ tree rebasing)
   report.py            # HTML report generation (migration + dedup modes)
   logging_util.py      # Migration logging and progress reporting
   albums.py            # Album symlink creation
@@ -269,6 +307,7 @@ tests/
   test_copy.py
   test_report.py
   test_albums.py
+  test_raw.py          # RAW file handling (Raw/ tree + exiftool fallback)
 migrate_photos.py      # Thin wrapper for backward compatibility
 pyproject.toml         # Project metadata and dependencies
 ```

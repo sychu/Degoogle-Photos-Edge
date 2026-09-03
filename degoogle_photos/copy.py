@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .media import is_raw_file
+
 
 def compute_dest_path(output_root: Path, media_path: Path, dt: Optional[datetime],
                       date_source: Optional[str] = None,
@@ -15,8 +17,15 @@ def compute_dest_path(output_root: Path, media_path: Path, dt: Optional[datetime
     to `output_root/YYYY/unknown/filename`. `dest_name` overrides the filename
     used (e.g. the corrected name from `effective_media_name`); pure path math,
     no I/O.
+
+    RAW files are rebased into a separate detached ``output_root/Raw/`` tree
+    following the same date rules (``Raw/Needs Review``, ``Raw/YYYY/unknown``,
+    ``Raw/YYYY/MM``). Classification is driven by `dest_name` (the sniffed /
+    effective name), never by the source extension alone.
     """
     name = dest_name if dest_name is not None else media_path.name
+    if is_raw_file(name):
+        output_root = output_root / "Raw"
     if not dt:
         return output_root / "Needs Review" / name
     if date_source == "parent_dir":

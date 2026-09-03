@@ -5,6 +5,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .exiftool_util import PILLOW_EXIF_EXTENSIONS, metadata_from_exiftool
+
+# Tooltip keys that come from EXIF/embedded metadata (not merely the image
+# decode); used to decide whether the exiftool fallback should fill gaps left
+# by the Pillow pass. ``dimensions`` is deliberately excluded: Pillow sets it
+# for any format it can decode (notably HEIC/WebP) even without EXIF, so it
+# must not suppress the fallback for those formats.
+_EXIF_META_KEYS = ("camera", "iso", "focal_length", "aperture", "gps")
+
 
 def extract_metadata(media_path: Path, json_path: Optional[Path]) -> dict:
     """
@@ -58,6 +67,12 @@ def extract_metadata(media_path: Path, json_path: Optional[Path]) -> dict:
                         pass
         except Exception:
             pass
+
+    # Fill gaps with exiftool when Pillow yielded no EXIF-derived keys and
+    # the extension is outside the set Pillow reads reliably (videos, RAW,
+    # HEIC, …). Silent best-effort — never raises.
+    if not any(k in meta for k in _EXIF_META_KEYS) and ext not in PILLOW_EXIF_EXTENSIONS:
+        meta.update(metadata_from_exiftool(media_path))
 
     # --- JSON sidecar metadata ---
     if json_path:

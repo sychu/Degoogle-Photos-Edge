@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .media import is_raw_file
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".heic", ".webp", ".bmp", ".tiff", ".tif"}
 
 HTML_UPDATE_INTERVAL = 200  # write HTML every N files
@@ -67,12 +69,14 @@ class HtmlReport:
     def add_copied(self, dest_path: Path, source_path: Path, dt: Optional[datetime],
                    date_source: str, album: str, had_json: bool,
                    metadata: Optional[dict] = None):
+        is_raw = is_raw_file(dest_path.name)
         if not dt:
-            folder = "Needs Review"
+            folder = "Raw/Needs Review" if is_raw else "Needs Review"
         elif date_source == "parent_dir":
-            folder = f"{dt.year:04d}/unknown"
+            folder = f"Raw/{dt.year:04d}/unknown" if is_raw else f"{dt.year:04d}/unknown"
         else:
-            folder = f"{dt.year:04d}/{dt.month:02d}"
+            folder = (f"Raw/{dt.year:04d}/{dt.month:02d}"
+                      if is_raw else f"{dt.year:04d}/{dt.month:02d}")
         entry = {
             "name": dest_path.name,
             "dest": str(dest_path),
@@ -82,6 +86,7 @@ class HtmlReport:
             "album": album,
             "had_json": had_json,
             "is_image": dest_path.suffix.lower() in IMAGE_EXTENSIONS,
+            "is_raw": is_raw,
             "metadata": metadata or {},
         }
         self.files_by_folder[folder].append(entry)
@@ -116,6 +121,14 @@ class HtmlReport:
     def _folder_slug(folder: str) -> str:
         """Filesystem/URL-safe slug for a folder key (slashes and spaces → ``_``)."""
         return folder.replace("/", "_").replace(" ", "_")
+
+    def _raw_folders(self) -> list:
+        """Folder keys (Raw/YYYY/MM, Raw/YYYY/unknown, Raw/Needs Review) that hold RAW files."""
+        return sorted(f for f in self.files_by_folder if f.startswith("Raw/"))
+
+    def _raw_total(self) -> int:
+        """Total number of RAW files recorded."""
+        return sum(len(self.files_by_folder[f]) for f in self._raw_folders())
 
     def begin_run(self):
         """Open a new timestamped run directory and redirect report writes into it.
@@ -199,6 +212,11 @@ class HtmlReport:
         if unknown_total > 0:
             html.append(f'<div class="stat"><span class="num"><a href="#attention-needed">{unknown_total}</a></span>'
                         f'<span class="label">Unknown month</span></div>')
+        raw_folders = self._raw_folders()
+        raw_total = self._raw_total()
+        if raw_total > 0:
+            html.append(f'<div class="stat"><span class="num"><a href="#raw-files">{raw_total}</a></span>'
+                        f'<span class="label">RAW files</span></div>')
         self._extra_stats(html)
         html.append('</div>')
 
@@ -206,30 +224,47 @@ class HtmlReport:
         html.append('<h3>Date Sources</h3><table class="date-sources"><tr><th>Source</th><th>Count</th></tr>')
         source_labels = {
             "exif": "EXIF DateTimeOriginal",
+            "exiftool": "EXIF/QuickTime (exiftool)",
             "json_taken": "JSON photoTakenTime",
             "filename": "Filename pattern",
             "json_created": "JSON creationTime",
             "parent_dir": "Parent directory year",
             "none": "No date found",
         }
-        for key in ["exif", "json_taken", "filename", "json_created", "parent_dir", "none"]:
+        for key in ["exif", "exiftool", "json_taken", "filename", "json_created", "parent_dir", "none"]:
             cnt = self.date_source_counts.get(key, 0)
             if cnt > 0:
                 html.append(f'<tr><td>{source_labels.get(key, key)}</td><td>{cnt}</td></tr>')
         html.append('</table></section>')
 
         # Attention needed section (only when such folders are non-empty)
-        if nr > 0 or unknown_folders:
+        raw_nr = len(self.files_by_folder.get("Raw/Needs Review", []))
+        if nr > 0 or raw_nr > 0 or unknown_folders:
             html.append('<section class="attention" id="attention-needed"><h2>Attention Needed</h2>')
             if nr > 0:
                 nr_slug = self._folder_slug("Needs Review")
                 html.append(f'<p><a href="folder_{nr_slug}.html">Needs Review</a> &mdash; '
                             f'No date found from any source ({nr} files)</p>')
+            if raw_nr > 0:
+                nr_slug = self._folder_slug("Raw/Needs Review")
+                html.append(f'<p><a href="folder_{nr_slug}.html">Raw / Needs Review</a> &mdash; '
+                            f'No date found from any source ({raw_nr} files)</p>')
             for folder in unknown_folders:
                 count = len(self.files_by_folder[folder])
                 slug = self._folder_slug(folder)
                 html.append(f'<p><a href="folder_{slug}.html">{folder}</a> &mdash; '
                             f'Year known from parent folder, month unknown ({count} files)</p>')
+            html.append('</section>')
+
+        # RAW Files section (only when at least one RAW file was spotted)
+        if raw_total > 0:
+            html.append('<section id="raw-files"><h2>RAW Files</h2>')
+            for folder in raw_folders:
+                count = len(self.files_by_folder[folder])
+                slug = self._folder_slug(folder)
+                css = ' class="review"' if folder == "Raw/Needs Review" or folder.endswith("/unknown") else ""
+                html.append(f'<p><a href="folder_{slug}.html"{css}>{folder}</a> &mdash; '
+                            f'{count} files</p>')
             html.append('</section>')
 
         # Album navigation
@@ -246,7 +281,8 @@ class HtmlReport:
         for folder in sorted(self.files_by_folder.keys()):
             count = len(self.files_by_folder[folder])
             slug = self._folder_slug(folder)
-            css = ' class="review"' if folder == "Needs Review" or folder.endswith("/unknown") else ""
+            css = (' class="review"' if folder in ("Needs Review", "Raw/Needs Review")
+                   or folder.endswith("/unknown") else "")
             html.append(f'<a href="folder_{slug}.html"{css}>{folder} ({count})</a>')
         html.append('</div></section>')
 
@@ -278,7 +314,7 @@ class HtmlReport:
         html = []
         html.append(self._page_head(f"Folder: {folder}", back_link=True))
         html.append(f'<h1>{folder} <span class="count">({len(files)} files)</span></h1>')
-        if folder == "Needs Review":
+        if folder in ("Needs Review", "Raw/Needs Review"):
             html.append('<p class="updated">No date found from any source. '
                         'Review and move to the correct YYYY/MM/ folder.</p>')
         elif folder.endswith("/unknown"):
@@ -392,6 +428,8 @@ class HtmlReport:
         finder_btn = (f'<a class="finder-btn" href="file://{_html_escape(parent_dir)}/" '
                       f'title="Open folder in Finder">Finder</a>')
 
+        raw_badge = '<span class="badge badge-raw">RAW</span>' if f.get("is_raw") else ""
+
         # Copy buttons (clipboard icon: &#x1f4cb;)
         copy_name_btn = (f'<button class="copy-btn" onclick="copyText(this, \'{_js_string(f["name"])}\')" '
                          f'title="Copy filename">&#x1f4cb; Name</button>')
@@ -404,7 +442,7 @@ class HtmlReport:
             f'<div class="file-info">'
             f'<div class="file-name" title="{_html_escape(f["name"])}">{_html_escape(f["name"])}</div>'
             f'<div class="file-date">{f["date"]}</div>'
-            f'<div class="file-meta">{src_badge} {json_badge} {finder_btn} {copy_name_btn} {copy_path_btn}</div>'
+            f'<div class="file-meta">{raw_badge} {src_badge} {json_badge} {finder_btn} {copy_name_btn} {copy_path_btn}</div>'
             f'<div class="file-album" title="{_html_escape(f["album"])}">Album: {_html_escape(f["album"])}</div>'
             f'</div></div>'
         )
@@ -428,12 +466,17 @@ class DedupReport:
         self.copied = 0
         self.errors: list = []   # [{"path": str, "error": str}]
         self.attention: list = []  # [{"source", "dest", "date_source"}]
+        self.raw_files: list = []  # [{"source", "dest"}] — RAW files copied to Raw/
         self.skipped_dest: list = []  # [{"source", "dest"}] — already in destination
         self.skipped_intra: list = []  # [{"source", "dest"}] — duplicates of files copied in this run
 
     def add_attention(self, src, dest, date_source):
         """Add a file that needs manual review (Needs Review/ or YYYY/unknown/)."""
         self.attention.append({"source": str(src), "dest": str(dest), "date_source": date_source})
+
+    def add_raw(self, src, dest):
+        """Add a RAW file copied into the detached Raw/ tree."""
+        self.raw_files.append({"source": str(src), "dest": str(dest)})
 
     def add_skipped_dest(self, source: Path, dest: Path):
         """Record a source file skipped because its content already exists in the destination."""
@@ -522,6 +565,8 @@ class DedupReport:
             html.append(f'<div class="stat"><span class="num">{len(self.skipped_dest)}</span><span class="label">Already in destination</span></div>')
         if self.skipped_intra:
             html.append(f'<div class="stat"><span class="num">{len(self.skipped_intra)}</span><span class="label">Intra-run duplicates</span></div>')
+        if self.raw_files:
+            html.append(f'<div class="stat"><span class="num">{len(self.raw_files)}</span><span class="label">RAW files</span></div>')
         html.append('</div>')
 
         if not self.groups and not self.skipped_dest and not self.skipped_intra:
@@ -582,9 +627,38 @@ class DedupReport:
 
         if self.skipped_intra:
             html.append('<section><h2>Intra-run Duplicates</h2>')
-            _skip_table(self.skipped_intra, 'the source contained duplicate content; '
-                                            'only the first copy was imported.')
-            html.append('</section>')
+            html.append(f'<p>{len(self.skipped_intra)} source files were skipped because '
+                        'the source contained duplicate content; only the first copy was imported.</p>')
+            html.append('<table><tr><th>Source</th><th>Destination</th><th></th></tr>')
+            for s in self.skipped_intra:
+                src_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(s["source"])}\')" '
+                           f'title="Copy source path">&#x1f4cb; Src</button>')
+                dst_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(s["dest"])}\')" '
+                           f'title="Copy destination path">&#x1f4cb; Dest</button>')
+                html.append(f'<tr><td style="font-size:0.8em;word-break:break-all">{_html_escape(s["source"])}</td>'
+                            f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(s["dest"])}</td>'
+                            f'<td style="white-space:nowrap">{src_btn} {dst_btn}</td></tr>')
+            html.append('</table></section>')
+
+        # RAW files (only when at least one RAW file was copied)
+        if self.raw_files:
+            html.append('<section><h2>RAW Files</h2>')
+            html.append(f'<p>{len(self.raw_files)} RAW file(s) were copied into the '
+                        '<code>Raw/</code> tree.</p>')
+            html.append('<table><tr><th>Source</th><th>Destination</th><th></th></tr>')
+            for r in self.raw_files:
+                src_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(r["source"])}\')" '
+                           f'title="Copy source path">&#x1f4cb; Src</button>')
+                dst_btn = (f'<button class="copy-btn" '
+                           f'onclick="copyText(this, \'{_js_string(r["dest"])}\')" '
+                           f'title="Copy destination path">&#x1f4cb; Dest</button>')
+                html.append(f'<tr><td style="font-size:0.8em;word-break:break-all">{_html_escape(r["source"])}</td>'
+                            f'<td style="font-size:0.8em;word-break:break-all">{_html_escape(r["dest"])}</td>'
+                            f'<td style="white-space:nowrap">{src_btn} {dst_btn}</td></tr>')
+            html.append('</table></section>')
 
         # Duplicate groups
         if self.groups:
@@ -800,6 +874,8 @@ th { color: #8b949e; }
 .file-album { font-size: 0.7em; color: #6e7681; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge { font-size: 0.65em; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
 .badge-exif { background: #1f6feb33; color: #58a6ff; }
+.badge-exiftool { background: #1f6feb33; color: #58a6ff; }
+.badge-raw { background: #8b5cf633; color: #b8a1ff; }
 .badge-json_taken { background: #23863633; color: #3fb950; }
 .badge-filename { background: #9e6a03aa; color: #e3b341; }
 .badge-json_created { background: #23863633; color: #3fb950; }

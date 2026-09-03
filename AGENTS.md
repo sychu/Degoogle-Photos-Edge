@@ -13,7 +13,7 @@ Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into
 `YYYY/MM/` folder hierarchies. It has three operating modes:
 
 - **Takeout migration (default):** Scans multiple `Takeout*/Google Photos/` directories,
-  builds a global index, extracts the best date per file (EXIF > JSON `photoTakenTime` >
+  builds a global index, extracts the best date per file (EXIF/embedded > JSON `photoTakenTime` >
   filename > JSON `creationTime` > parent dir year), deduplicates by MD5 hash + date, copies
   media into `YYYY/MM/` folders (keeping JSON sidecars alongside, `YYYY/unknown/` when only
   the year is known, `Needs Review/` when nothing is), creates `Google Albums/`
@@ -21,16 +21,21 @@ Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into
   renames of sniffed destinations from older output. Sidecar matching falls back from a file's own JSON to
   `-edited`/`(N)` variants, and Live Photo videos (MP4/MOV) inherit their same-stem still's
   sidecar. Mislabeled `.heic`-named video files are sniffed by magic bytes (`sniff.py`) and
-  copied with their real `.mp4`/`.mov` name.
+  copied with their real `.mp4`/`.mov` name. **RAW camera files** are matched by
+  `RAW_EXTENSIONS` (`media.py`) and copied into a **separate detached `Raw/` tree**
+  (`Raw/YYYY/MM/`, `Raw/YYYY/unknown/`, `Raw/Needs Review/`) so they never mix into the
+  regular `YYYY/MM/` media folders; RAW files still participate in album/alias symlinks.
+  The optional `exiftool` binary (via `exiftool_util.py`, `-stay_open` batch mode) supplies
+  embedded dates/metadata for videos, RAW, and HEIC that Pillow cannot read.
 - **Dedup mode (`--dedup-scan`):** Scans any folder(s) recursively, computes MD5 checksums,
   keeps one file per duplicate group (shortest path wins), copies unique files into a
-  date-organised `YYYY/MM/` structure, and recreates the source folder tree under
+  date-organised `YYYY/MM/` structure (RAW files into the separate `Raw/` tree), and recreates the source folder tree under
   `by-folder/` as relative symlinks. The source folders are never modified.
 - **Dedup-import mode (`--dedup-import`):** Merges an unorganised backup (no Takeout/JSON)
   into an already-organised library. It hashes the existing real files in `--output`
-  (symlinks excluded) into an in-memory `existing_md5s` set, skips source files whose MD5
+  (symlinks excluded, including any already in `Raw/`) into an in-memory `existing_md5s` set, skips source files whose MD5
   matches, copies new files into `YYYY/MM/` (same date cascade/collisions as dedup mode —
-  a same-named file with different content is renamed `_2`, never overwritten), and
+  a same-named file with different content is renamed `_2`, never overwritten; RAW files into the `Raw/` tree), and
   creates directory-name aliases under a separate `Imported Albums/` root (no `by-folder/`).
   Reruns merge into an existing dated album dir with the same leaf name rather than
   creating a second dated dir.
@@ -89,8 +94,10 @@ pytest -v tests/test_dedup_mode.py -k import_name
 ## Code organization
 
 - `indexing.py` — Takeout directory scanning, JSON sidecar indexing, recursive media finder.
-- `dates.py` — date extraction cascade (EXIF, JSON, filename, parent dir year).
+- `dates.py` — date extraction cascade (EXIF/embedded, JSON, filename, parent dir year).
 - `metadata.py` — rich metadata extraction for report tooltips.
+- `media.py` — RAW extension set (`RAW_EXTENSIONS`) + `is_raw_file` classification.
+- `exiftool_util.py` — optional `exiftool`-via-pyexiftool fallback (embedded dates/metadata).
 - `dedup.py` — MD5 hashing, dedup keys, duplicate grouping.
 - `sniff.py` — magic-byte detection for mislabeled `.heic`-as-video Live Photo parts.
 - `copy.py` — file copying with collision resolution and sidecar handling.
@@ -99,7 +106,7 @@ pytest -v tests/test_dedup_mode.py -k import_name
   `Reports/DeGoogle Reports/` with per-run `migration-<timestamp>/` pages + a run-listing
   index), `DedupReport` (scan, `Reports/Dedup Reports/`), and `ImportReport(HtmlReport)`
   (import, `Reports/Import Reports/` with per-run `import-<timestamp>/` pages + a
-  run-listing index).
+  run-listing index). All three surface a RAW section (stat + list) only when RAW files were spotted.
 - `logging_util.py` — migration logging and progress reporting.
 - `cli.py` — entry point orchestrating migration and dedup-scan; defines `MEDIA_EXTENSIONS`.
 
