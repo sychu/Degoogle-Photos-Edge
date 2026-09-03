@@ -48,8 +48,8 @@ def _normalize_leading_date(name: str) -> Optional[str]:
 def album_folder_name(name: str, oldest_dt: Optional[datetime]) -> str:
     """Return the album folder name, prefixed with its oldest file's date if needed.
 
-    Shared by migration mode (``Albums/``) and import mode (``ImportedAlbums/``)
-    so both apply the same date-prefix rules.
+    Shared by migration mode (``Google Albums/``) and import mode
+    (``Imported Albums/``) so both apply the same date-prefix rules.
     """
     normalized = _normalize_leading_date(name)
     if normalized is not None:
@@ -68,7 +68,7 @@ def create_album_symlinks(
     album_files: dict,
     dry_run: bool,
     log: 'MigrationLog',
-    root_name: str = "Albums",
+    root_name: str = "Google Albums",
     phase: str = "Phase 5",
 ):
     """Create <root_name>/<album_name>/ folders with symlinks to the actual files.

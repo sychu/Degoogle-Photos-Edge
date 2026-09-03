@@ -210,7 +210,7 @@ def _run_import(args):
     Dedup-import mode: merge an unorganized backup (no Takeout/JSON structure)
     into an already-organised library, skipping files whose content already
     exists in --output. Unlike --dedup-scan, the output is treated as the
-    reference set and directory-based aliases go under ImportedAlbums/ instead
+    reference set and directory-based aliases go under Imported Albums/ instead
     of a by-folder/ mirror.
     """
     source_roots = [p.resolve() for p in args.source]
@@ -234,8 +234,8 @@ def _run_import(args):
     start = time.time()
 
     # Phase 0: hash existing (real) files in the output into an in-memory set.
-    # Symlinks (Albums/, by-folder/, ImportedAlbums/) are excluded so they never
-    # count as a pre-existing copy of a source file.
+    # Symlinks (Google Albums/, by-folder/, Imported Albums/) are excluded so
+    # they never count as a pre-existing copy of a source file.
     existing_md5s = set()
     if output_root.is_dir():
         print("Phase 0: Hashing existing destination files...")
@@ -327,7 +327,7 @@ def _run_import(args):
                     shutil.copy2(src, dest)
                 existing_md5s.add(md5)
                 # Register the alias only on the success path — failed copies
-                # must not leave a dangling ImportedAlbums/ entry behind.
+                # must not leave a dangling Imported Albums/ entry behind.
                 album_files[src.parent.name].append((dest, prefix_dt))
                 report.add_copied(dest, src, dt, date_source, src.parent.name,
                                   False, metadata=extract_metadata(src, None))
@@ -343,9 +343,9 @@ def _run_import(args):
     copy_bar.finish()
     report.copied = copied
 
-    # Phase 4: Create ImportedAlbums/<parent-dir>/ symlinks (no by-folder/ mirror)
+    # Phase 4: Create Imported Albums/<parent-dir>/ symlinks (no by-folder/ mirror)
     create_album_symlinks(output_root, album_files, dry_run, log=MigrationLog(output_root, dry_run),
-                          root_name="ImportedAlbums", phase="Phase 4")
+                          root_name="Imported Albums", phase="Phase 4")
 
     # Write report
     output_root.mkdir(parents=True, exist_ok=True)
@@ -370,7 +370,7 @@ def _run_import(args):
     for src in source_roots:
         print(f"Source: {src}")
     print(f"\nDate folders:     {output_root}")
-    print(f"Imported albums:  {output_root / 'ImportedAlbums'}")
+    print(f"Imported albums:  {output_root / 'Imported Albums'}")
     print(f"Report:           {report_index} (this run: {report.run_dir.name}/index.html)")
     if report_index.exists():
         webbrowser.open(report_index.resolve().as_uri())
@@ -382,8 +382,8 @@ def main():
     parser.add_argument("--source", type=Path, nargs="+", default=[Path.cwd()],
                         help="One or more source folders. For migration: root containing Takeout dirs. "
                              "For --dedup-scan: any folders to scan (repeat --source or space-separate).")
-    parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogle-Edge Photos",
-                        help="Output root for organized photos or dedup report (default: ./DeGoogle-Edge Photos)")
+    parser.add_argument("--output", type=Path, default=Path.cwd() / "DeGoogle Photos",
+                        help="Output root for organized photos or dedup report (default: ./DeGoogle Photos)")
 
     # Dedup modes (mutually exclusive)
     mode_group = parser.add_mutually_exclusive_group()
@@ -394,13 +394,13 @@ def main():
     mode_group.add_argument("--dedup-import", action="store_true",
                             help="Merge an unorganized backup into an existing organised "
                                  "library. Files whose content already exists in --output are "
-                                 "skipped; directory-based aliases go under ImportedAlbums/.")
+                                 "skipped; directory-based aliases go under Imported Albums/.")
 
     args = parser.parse_args()
 
     if args.dedup_scan:
-        if args.output == Path.cwd() / "DeGoogle-Edge Photos":
-            args.output = Path.cwd() / "Deduped-Edge Photos"
+        if args.output == Path.cwd() / "DeGoogle Photos":
+            args.output = Path.cwd() / "Deduped Photos"
         _run_dedup(args)
         return
 
@@ -413,6 +413,8 @@ def main():
     dry_run = args.dry_run
 
     log = MigrationLog(output_root, dry_run, progress_interval=PROGRESS_INTERVAL)
+    # Open the per-run report dir so live progress writes land in migration-<ts>/
+    log.html.begin_run()
 
     # Phase 1: Build global index
     print("Phase 1: Scanning Takeout directories...")
@@ -428,7 +430,7 @@ def main():
     log.html.total = len(media_files)
 
     # Album tracking: album_name -> [(dest_path, dt), ...]; dt is None for
-    # needs_review and year-only (parent-dir) dates, too imprecise for a prefix.
+    # Needs Review and year-only (parent-dir) dates, too imprecise for a prefix.
     album_files: dict[str, list[tuple[Path, Optional[datetime]]]] = defaultdict(list)
 
     # Phase 2-4: Process each media file
@@ -485,7 +487,7 @@ def main():
                 continue
             seen_dedup_keys.add(dedup_key)
 
-            # Handle needs_review
+            # Handle Needs Review
             if dt is None:
                 log.needs_review += 1
                 log.log_review(media_path, "No date found from any source")
@@ -528,6 +530,7 @@ def main():
 
     # Phase 6: Write reports
     log.write_logs()
+    log.html.finish_run()
 
 
 if __name__ == "__main__":

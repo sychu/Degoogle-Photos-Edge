@@ -18,7 +18,7 @@ def compute_dest_path(output_root: Path, media_path: Path, dt: Optional[datetime
     """
     name = dest_name if dest_name is not None else media_path.name
     if not dt:
-        return output_root / "needs_review" / name
+        return output_root / "Needs Review" / name
     if date_source == "parent_dir":
         return output_root / f"{dt.year:04d}" / "unknown" / name
     return output_root / f"{dt.year:04d}" / f"{dt.month:02d}" / name

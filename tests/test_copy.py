@@ -34,7 +34,7 @@ def test_compute_dest_path_with_date(output_dir):
 def test_compute_dest_path_without_date(output_dir):
     media = Path("/fake/photo.jpg")
     dest = compute_dest_path(output_dir, media, None)
-    assert dest == output_dir / "needs_review" / "photo.jpg"
+    assert dest == output_dir / "Needs Review" / "photo.jpg"
 
 
 def test_compute_dest_path_parent_dir(output_dir):
@@ -61,10 +61,10 @@ def test_compute_dest_path_dest_name_unknown(output_dir):
     assert dest == output_dir / "2015" / "unknown" / "IMG_1234.mp4"
 
 
-def test_compute_dest_path_dest_name_needs_review(output_dir):
+def test_compute_dest_path_dest_name_no_date(output_dir):
     media = Path("/fake/IMG_1234.HEIC")
     dest = compute_dest_path(output_dir, media, None, dest_name="IMG_1234.mp4")
-    assert dest == output_dir / "needs_review" / "IMG_1234.mp4"
+    assert dest == output_dir / "Needs Review" / "IMG_1234.mp4"
 
 
 def test_resolve_collision_no_conflict(tmp_path):
@@ -337,7 +337,10 @@ def test_migration_rerun_renames_sniffed_dest(tmp_path, monkeypatch):
     assert len(media_in_bucket) == 1
     assert media_in_bucket[0].name == "IMG_1.mp4"
     assert (bucket / "IMG_1.mp4.json").exists()
-    log_text = (output / "migration_log.txt").read_text(encoding="utf-8")
+    report_root = output / "Reports" / "DeGoogle Reports"
+    run_dirs = sorted(d.name for d in report_root.iterdir()
+                      if d.is_dir() and d.name.startswith("migration-"))
+    log_text = ((report_root / run_dirs[-1]) / "migration_log.txt").read_text(encoding="utf-8")
     assert "Skipped (already copied): 1" in log_text
 
 

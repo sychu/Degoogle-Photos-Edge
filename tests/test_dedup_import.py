@@ -29,19 +29,17 @@ def copied_media_files(output: Path):
     return [
         p for p in output.rglob("*")
         if p.is_file() and not p.is_symlink()
-        and "ImportedAlbums" not in p.parts
-        and "Albums" not in p.parts
+        and "Imported Albums" not in p.parts
+        and "Google Albums" not in p.parts
         and "by-folder" not in p.parts
-        and "report" not in p.parts
-        and "report-dedup" not in p.parts
-        and "report-import" not in p.parts
+        and "Reports" not in p.parts
     ]
 
 
 def import_run_html(output: Path) -> str:
-    """HTML of the latest import run page (report-import/import-*/index.html)."""
+    """HTML of the latest import run page (Import Reports/import-*/index.html)."""
     runs = sorted(
-        (d for d in (output / "report-import").iterdir() if d.is_dir()),
+        (d for d in (output / "Reports" / "Import Reports").iterdir() if d.is_dir()),
         key=lambda d: d.name,
     )
     assert runs, "no import run directories written"
@@ -49,8 +47,8 @@ def import_run_html(output: Path) -> str:
 
 
 def symlinks_in_imported_albums(output: Path):
-    """All symlinks under output/ImportedAlbums/."""
-    imported = output / "ImportedAlbums"
+    """All symlinks under output/Imported Albums/."""
+    imported = output / "Imported Albums"
     if not imported.exists():
         return []
     return [p for p in imported.rglob("*") if p.is_symlink()]
@@ -178,7 +176,7 @@ def test_name_collision_renames_and_preserves_existing(tmp_path):
     renamed = out / "2020" / "05" / "IMG_20200510_120000_2.jpg"
     assert renamed.read_bytes() == b"different-content"
 
-    # The ImportedAlbums symlink points at the renamed file and resolves.
+    # The Imported Albums symlink points at the renamed file and resolves.
     links = symlinks_in_imported_albums(out)
     assert len(links) == 1
     assert links[0].name == "IMG_20200510_120000_2.jpg"
@@ -195,7 +193,7 @@ def test_symlink_only_dest_is_not_a_false_positive(tmp_path):
     (external / "orig.jpg").write_bytes(b"content")
 
     out = tmp_path / "output"
-    album_dir = out / "Albums" / "Album1"
+    album_dir = out / "Google Albums" / "Album1"
     album_dir.mkdir(parents=True)
     (album_dir / "IMG_20200510_120000.jpg").symlink_to(
         os.path.relpath(external / "orig.jpg", album_dir)
@@ -210,7 +208,7 @@ def test_symlink_only_dest_is_not_a_false_positive(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# ImportedAlbums aliases
+# Imported Albums aliases
 # ---------------------------------------------------------------------------
 
 def test_imported_albums_created_and_no_by_folder(tmp_path):
@@ -221,7 +219,7 @@ def test_imported_albums_created_and_no_by_folder(tmp_path):
     out = tmp_path / "output"
     _run_import(make_args(src, out))
 
-    assert (out / "ImportedAlbums").is_dir()
+    assert (out / "Imported Albums").is_dir()
     assert not (out / "by-folder").exists()
     links = symlinks_in_imported_albums(out)
     assert len(links) == 1
@@ -236,7 +234,7 @@ def test_alias_keyed_by_immediate_parent(tmp_path):
     out = tmp_path / "output"
     _run_import(make_args(src, out))
 
-    names = {d.name for d in (out / "ImportedAlbums").iterdir()}
+    names = {d.name for d in (out / "Imported Albums").iterdir()}
     assert any(n.endswith("vacation") for n in names)
     assert any(n.endswith("nested") for n in names)
 
@@ -249,8 +247,8 @@ def test_leading_date_folder_name_not_double_prefixed(tmp_path):
     out = tmp_path / "output"
     _run_import(make_args(src, out))
 
-    assert (out / "ImportedAlbums" / "2010-05-04 reunion").is_dir()
-    names = [d.name for d in (out / "ImportedAlbums").iterdir()]
+    assert (out / "Imported Albums" / "2010-05-04 reunion").is_dir()
+    names = [d.name for d in (out / "Imported Albums").iterdir()]
     assert names == ["2010-05-04 reunion"]
 
 
@@ -263,7 +261,7 @@ def test_album_prefix_matches_migration_helper(tmp_path):
     _run_import(make_args(src, out))
 
     expected = album_folder_name("Trip", datetime(2020, 5, 10))
-    assert (out / "ImportedAlbums" / expected).is_dir()
+    assert (out / "Imported Albums" / expected).is_dir()
 
 
 def test_needs_review_file_copied_and_aliased_without_prefix(tmp_path):
@@ -274,9 +272,9 @@ def test_needs_review_file_copied_and_aliased_without_prefix(tmp_path):
     out = tmp_path / "output"
     _run_import(make_args(src, out))
 
-    assert (out / "needs_review" / "no_date_img.jpg").exists()
-    assert (out / "ImportedAlbums" / "folderA").is_dir()
-    assert (out / "ImportedAlbums" / "folderA" / "no_date_img.jpg").is_symlink()
+    assert (out / "Needs Review" / "no_date_img.jpg").exists()
+    assert (out / "Imported Albums" / "folderA").is_dir()
+    assert (out / "Imported Albums" / "folderA" / "no_date_img.jpg").is_symlink()
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +325,7 @@ def test_dry_run_copies_nothing_and_no_symlinks(tmp_path):
 
     assert copied_media_files(out) == []
     assert symlinks_in_imported_albums(out) == []
-    assert (out / "report-import" / "index.html").exists()
+    assert (out / "Reports" / "Import Reports" / "index.html").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +341,7 @@ def test_second_import_merges_into_existing_dated_album(tmp_path):
     out = tmp_path / "output"
     _run_import(make_args(src1, out))
 
-    first_dir = out / "ImportedAlbums" / "2020-01-01 family"
+    first_dir = out / "Imported Albums" / "2020-01-01 family"
     assert first_dir.is_dir()
     first_link = first_dir / "IMG_20200101_120000.jpg"
     assert first_link.is_symlink()
@@ -356,8 +354,8 @@ def test_second_import_merges_into_existing_dated_album(tmp_path):
 
     # The new symlink joins the existing dated dir instead of spawning a
     # second "2020-03-03 family" folder.
-    expected_dir = out / "ImportedAlbums" / "2020-01-01 family"
-    names = [d.name for d in (out / "ImportedAlbums").iterdir()]
+    expected_dir = out / "Imported Albums" / "2020-01-01 family"
+    names = [d.name for d in (out / "Imported Albums").iterdir()]
     assert names == ["2020-01-01 family"]
     new_link = expected_dir / "IMG_20200303_160000.jpg"
     assert new_link.is_symlink()
@@ -377,7 +375,7 @@ def test_each_import_run_keeps_its_own_report(tmp_path):
     _run_import(make_args(src1, out))
     _run_import(make_args(src2, out))
 
-    report_dir = out / "report-import"
+    report_dir = out / "Reports" / "Import Reports"
     run_dirs = sorted(d.name for d in report_dir.iterdir()
                       if d.is_dir() and d.name.startswith("import-"))
     assert len(run_dirs) == 2
@@ -391,7 +389,7 @@ def test_each_import_run_keeps_its_own_report(tmp_path):
 def test_import_does_not_touch_migration_report(tmp_path):
     # Pre-existing migration report must survive an import run.
     out = tmp_path / "output"
-    migration_report = out / "report" / "index.html"
+    migration_report = out / "Reports" / "DeGoogle Reports" / "index.html"
     migration_report.parent.mkdir(parents=True)
     migration_report.write_text("migration-dashboard", encoding="utf-8")
 
@@ -401,7 +399,7 @@ def test_import_does_not_touch_migration_report(tmp_path):
     _run_import(make_args(src, out))
 
     assert migration_report.read_text(encoding="utf-8") == "migration-dashboard"
-    assert (out / "report-import" / "index.html").exists()
+    assert (out / "Reports" / "Import Reports" / "index.html").exists()
 
 
 def test_import_report_browsable(tmp_path):
@@ -412,7 +410,7 @@ def test_import_report_browsable(tmp_path):
     out = tmp_path / "output"
     _run_import(make_args(src, out))
 
-    run_dir = next(d for d in (out / "report-import").iterdir()
+    run_dir = next(d for d in (out / "Reports" / "Import Reports").iterdir()
                    if d.is_dir() and d.name.startswith("import-"))
     html = (run_dir / "index.html").read_text(encoding="utf-8")
     # Index links to the date-folder page and the album page...
@@ -456,15 +454,15 @@ def test_runs_listing_matches_report_style(tmp_path):
     _run_import(make_args(src, out))
     _run_import(make_args(src, out))
 
-    listing = (out / "report-import" / "index.html").read_text(encoding="utf-8")
+    listing = (out / "Reports" / "Import Reports" / "index.html").read_text(encoding="utf-8")
     # Styled like the rest of the reports (summary grid + generated line).
     assert 'class="summary"' in listing
     assert 'class="stat-grid"' in listing
     assert "Import runs" in listing
     assert "Generated:" in listing
     # The listing references a style.css that lives next to it (not one level down).
-    assert (out / "report-import" / "style.css").exists()
+    assert (out / "Reports" / "Import Reports" / "style.css").exists()
     # Both runs are listed, newest first.
-    runs = sorted(d.name for d in (out / "report-import").iterdir()
+    runs = sorted(d.name for d in (out / "Reports" / "Import Reports").iterdir()
                   if d.is_dir() and d.name.startswith("import-"))
     assert listing.index(f"{runs[-1]}/index.html") < listing.index(f"{runs[0]}/index.html")

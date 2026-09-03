@@ -32,12 +32,23 @@ def _slugify(name: str) -> str:
 
 
 class HtmlReport:
-    """Generates a multi-page browsable HTML report of the migration."""
+    """Generates a multi-page browsable HTML report of the migration.
+
+    Pages live under ``<output_root>/Reports/DeGoogle Reports/``. Each
+    migration run can be isolated in its own timestamped ``migration-<ts>/``
+    subdirectory via ``begin_run()``/``finish_run()``; the report root's
+    ``index.html`` then lists all runs, newest first.
+    """
+
+    run_prefix: str = "migration"
+    runs_title: str = "Migration Reports"
 
     def __init__(self, output_root: Path, dry_run: bool):
         self.output_root = output_root
         self.dry_run = dry_run
-        self.report_dir = output_root / "report"
+        self.report_dir = output_root / "Reports" / "DeGoogle Reports"
+        self.report_root = self.report_dir
+        self.run_dir: Optional[Path] = None
         self.report_title = "Degoogle-Photos Report"
         # files_by_folder["2020/03"] = [{"name": ..., "dest": ..., ...}, ...]
         self.files_by_folder = defaultdict(list)  # type: dict[str, list]
@@ -57,7 +68,7 @@ class HtmlReport:
                    date_source: str, album: str, had_json: bool,
                    metadata: Optional[dict] = None):
         if not dt:
-            folder = "needs_review"
+            folder = "Needs Review"
         elif date_source == "parent_dir":
             folder = f"{dt.year:04d}/unknown"
         else:
@@ -100,6 +111,29 @@ class HtmlReport:
     # ------------------------------------------------------------------
     # Multi-page write
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _folder_slug(folder: str) -> str:
+        """Filesystem/URL-safe slug for a folder key (slashes and spaces → ``_``)."""
+        return folder.replace("/", "_").replace(" ", "_")
+
+    def begin_run(self):
+        """Open a new timestamped run directory and redirect report writes into it.
+
+        Called before processing starts so incremental ``_write()`` calls
+        (live progress updates) land inside ``<prefix>-<ts>/``;
+        ``finish_run()`` restores the report root and refreshes the runs
+        listing.
+        """
+        self.run_dir = self.report_root / f"{self.run_prefix}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+        self.report_dir = self.run_dir
+
+    def finish_run(self):
+        """Close the current run: restore the report root and rewrite the runs listing."""
+        if self.run_dir is None:
+            return
+        self.report_dir = self.report_root
+        self._write_runs_index(self.runs_title)
 
     def _write(self):
         self.report_dir.mkdir(parents=True, exist_ok=True)
@@ -155,9 +189,10 @@ class HtmlReport:
         html.append(f'<div class="stat"><span class="num">{total_copied}</span><span class="label">Copied</span></div>')
         html.append(f'<div class="stat"><span class="num">{total_dupes}</span><span class="label">Duplicates skipped</span></div>')
         html.append(f'<div class="stat"><span class="num">{total_errors}</span><span class="label">Errors</span></div>')
-        nr = len(self.files_by_folder.get("needs_review", []))
+        nr = len(self.files_by_folder.get("Needs Review", []))
         if nr > 0:
-            html.append(f'<div class="stat"><span class="num"><a href="folder_needs_review.html">{nr}</a></span>'
+            nr_slug = self._folder_slug("Needs Review")
+            html.append(f'<div class="stat"><span class="num"><a href="folder_{nr_slug}.html">{nr}</a></span>'
                         f'<span class="label">Needs review</span></div>')
         unknown_folders = sorted(f for f in self.files_by_folder if f.endswith("/unknown"))
         unknown_total = sum(len(self.files_by_folder[f]) for f in unknown_folders)
@@ -187,11 +222,12 @@ class HtmlReport:
         if nr > 0 or unknown_folders:
             html.append('<section class="attention" id="attention-needed"><h2>Attention Needed</h2>')
             if nr > 0:
-                html.append('<p><a href="folder_needs_review.html">needs_review</a> &mdash; '
+                nr_slug = self._folder_slug("Needs Review")
+                html.append(f'<p><a href="folder_{nr_slug}.html">Needs Review</a> &mdash; '
                             f'No date found from any source ({nr} files)</p>')
             for folder in unknown_folders:
                 count = len(self.files_by_folder[folder])
-                slug = folder.replace("/", "_")
+                slug = self._folder_slug(folder)
                 html.append(f'<p><a href="folder_{slug}.html">{folder}</a> &mdash; '
                             f'Year known from parent folder, month unknown ({count} files)</p>')
             html.append('</section>')
@@ -209,8 +245,8 @@ class HtmlReport:
         html.append('<section class="nav-section"><h2>Browse by Date Folder</h2><div class="folder-nav">')
         for folder in sorted(self.files_by_folder.keys()):
             count = len(self.files_by_folder[folder])
-            slug = folder.replace("/", "_")
-            css = ' class="review"' if folder == "needs_review" or folder.endswith("/unknown") else ""
+            slug = self._folder_slug(folder)
+            css = ' class="review"' if folder == "Needs Review" or folder.endswith("/unknown") else ""
             html.append(f'<a href="folder_{slug}.html"{css}>{folder} ({count})</a>')
         html.append('</div></section>')
 
@@ -238,11 +274,11 @@ class HtmlReport:
         (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
 
     def _write_folder_page(self, folder: str, files: list):
-        slug = folder.replace("/", "_")
+        slug = self._folder_slug(folder)
         html = []
         html.append(self._page_head(f"Folder: {folder}", back_link=True))
         html.append(f'<h1>{folder} <span class="count">({len(files)} files)</span></h1>')
-        if folder == "needs_review":
+        if folder == "Needs Review":
             html.append('<p class="updated">No date found from any source. '
                         'Review and move to the correct YYYY/MM/ folder.</p>')
         elif folder.endswith("/unknown"):
@@ -267,6 +303,45 @@ class HtmlReport:
         html.append(_FOOTER)
         html.append('</body></html>')
         (self.report_dir / f"album_{slug}.html").write_text("\n".join(html), encoding="utf-8")
+
+    def _write_runs_index(self, title: str):
+        """Regenerate the report root's index.html listing all run dirs, newest first."""
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        self._write_css()
+        prefix_dash = f"{self.run_prefix}-"
+        run_dirs = sorted(
+            (d for d in self.report_dir.iterdir()
+             if d.is_dir() and d.name.startswith(prefix_dash)
+             and (d / "index.html").exists()),
+            key=lambda d: d.name, reverse=True,
+        )
+        html = [self._page_head(title)]
+        html.append(f'<header><h1>{title}</h1>')
+        html.append(f'<p class="updated">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                    f' &mdash; {len(run_dirs)} run(s)</p></header>')
+        html.append('<section class="summary"><h2>Summary</h2><div class="stat-grid">')
+        html.append(f'<div class="stat"><span class="num">{len(run_dirs)}</span>'
+                    f'<span class="label">{self.run_prefix.capitalize()} runs</span></div>')
+        if run_dirs:
+            html.append(f'<div class="stat"><span class="num"><a href="{run_dirs[0].name}/index.html">'
+                        f'{len(run_dirs)}</a></span><span class="label">Newest run</span></div>')
+        html.append('</div></section>')
+        if not run_dirs:
+            html.append(f'<p>No {self.run_prefix} runs yet.</p>')
+        else:
+            html.append('<section><h2>Runs</h2><table><tr><th>Run</th><th>Report</th></tr>')
+            for d in run_dirs:
+                stamp = d.name[len(prefix_dash):]
+                try:
+                    pretty = datetime.strptime(stamp, "%Y%m%d-%H%M%S-%f").strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    pretty = stamp
+                html.append(f'<tr><td>{_html_escape(pretty)}</td>'
+                            f'<td><a class="finder-btn" href="{d.name}/index.html">Open report</a></td></tr>')
+            html.append('</table></section>')
+        html.append(_FOOTER)
+        html.append('</body></html>')
+        (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Card rendering
@@ -338,15 +413,15 @@ class HtmlReport:
 class DedupReport:
     """HTML report for a dedup scan (no Takeout structure required).
 
-    Writes to ``<output>/report-dedup/`` so it never clobbers the migration
-    report at ``<output>/report/``.
+    Writes to ``<output>/Reports/Dedup Reports/`` so it never clobbers the
+    migration report at ``<output>/Reports/DeGoogle Reports/``.
     """
 
     def __init__(self, output_dir: Path, dry_run: bool, mode_label: str = "Dedup"):
         self.output_dir = output_dir
         self.dry_run = dry_run
         self.mode_label = mode_label
-        self.report_dir = output_dir / "report-dedup"
+        self.report_dir = output_dir / "Reports" / "Dedup Reports"
         self.groups: list = []   # [{"md5": str, "files": [{"path", "name", "size", "keeper"}]}]
         self.scanned = 0
         self.total = 0
@@ -357,7 +432,7 @@ class DedupReport:
         self.skipped_intra: list = []  # [{"source", "dest"}] — duplicates of files copied in this run
 
     def add_attention(self, src, dest, date_source):
-        """Add a file that needs manual review (needs_review/ or YYYY/unknown/)."""
+        """Add a file that needs manual review (Needs Review/ or YYYY/unknown/)."""
         self.attention.append({"source": str(src), "dest": str(dest), "date_source": date_source})
 
     def add_skipped_dest(self, source: Path, dest: Path):
@@ -562,20 +637,24 @@ class ImportReport(HtmlReport):
     Reuses ``HtmlReport``'s date-folder/album structure and file cards (the
     source's immediate parent dir acts as the album name), and adds
     import-specific skip tables. Each run's pages live in a timestamped
-    subdirectory (``report-import/import-<ts>/``) so history survives across
-    imports; ``report-import/index.html`` is regenerated as a listing of all
-    runs, newest first. Migration's ``report/`` is never touched.
+    subdirectory (``Reports/Import Reports/import-<ts>/``) so history survives
+    across imports; ``Reports/Import Reports/index.html`` is regenerated as a
+    listing of all runs, newest first. Migration's ``Reports/DeGoogle
+    Reports/`` is never touched.
     """
+
+    run_prefix = "import"
+    runs_title = "Dedup-import Reports"
 
     def __init__(self, output_root: Path, dry_run: bool):
         super().__init__(output_root, dry_run)
-        self.report_dir = output_root / "report-import"
+        self.report_dir = output_root / "Reports" / "Import Reports"
+        self.report_root = self.report_dir
         self.report_title = "Dedup-import Report"
         self.scanned = 0
         self.copied = 0
         self.skipped_dest: list = []   # [{"source", "dest"}] — content existed pre-run
         self.skipped_intra: list = []  # [{"source", "dest"}] — source-internal duplicates
-        self.run_dir: Optional[Path] = None  # set by write()
 
     def add_skipped_dest(self, source: Path, dest: Path):
         """Record a source file skipped because its content already exists in the destination."""
@@ -586,56 +665,14 @@ class ImportReport(HtmlReport):
         self.skipped_intra.append({"source": str(source), "dest": str(dest)})
 
     def write(self):
-        """Write this run's pages under report-import/import-<ts>/ and refresh
-        the run listing at report-import/index.html."""
+        """Write this run's pages under Import Reports/import-<ts>/ and refresh
+        the run listing at Import Reports/index.html."""
         self.processed = self.total  # written at end of run; header shows done state
-        run_dir = self.report_dir / f"import-{datetime.now():%Y%m%d-%H%M%S-%f}"
-        self.run_dir = run_dir
-        saved = self.report_dir
-        self.report_dir = run_dir
+        self.begin_run()
         try:
             self._write()
         finally:
-            self.report_dir = saved
-        self._write_runs_index()
-
-    def _write_runs_index(self):
-        """Regenerate report-import/index.html listing all run dirs, newest first."""
-        self.report_dir.mkdir(parents=True, exist_ok=True)
-        self._write_css()
-        run_dirs = sorted(
-            (d for d in self.report_dir.iterdir()
-             if d.is_dir() and d.name.startswith("import-")
-             and (d / "index.html").exists()),
-            key=lambda d: d.name, reverse=True,
-        )
-        html = [self._page_head("Dedup-import Reports")]
-        html.append('<header><h1>Dedup-import Reports</h1>')
-        html.append(f'<p class="updated">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
-                    f' &mdash; {len(run_dirs)} run(s)</p></header>')
-        html.append('<section class="summary"><h2>Summary</h2><div class="stat-grid">')
-        html.append(f'<div class="stat"><span class="num">{len(run_dirs)}</span>'
-                    f'<span class="label">Import runs</span></div>')
-        if run_dirs:
-            html.append(f'<div class="stat"><span class="num"><a href="{run_dirs[0].name}/index.html">'
-                        f'{len(run_dirs)}</a></span><span class="label">Newest run</span></div>')
-        html.append('</div></section>')
-        if not run_dirs:
-            html.append('<p>No import runs yet.</p>')
-        else:
-            html.append('<section><h2>Runs</h2><table><tr><th>Run</th><th>Report</th></tr>')
-            for d in run_dirs:
-                stamp = d.name[len("import-"):]
-                try:
-                    pretty = datetime.strptime(stamp, "%Y%m%d-%H%M%S-%f").strftime("%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    pretty = stamp
-                html.append(f'<tr><td>{_html_escape(pretty)}</td>'
-                            f'<td><a class="finder-btn" href="{d.name}/index.html">Open report</a></td></tr>')
-            html.append('</table></section>')
-        html.append(_FOOTER)
-        html.append('</body></html>')
-        (self.report_dir / "index.html").write_text("\n".join(html), encoding="utf-8")
+            self.finish_run()
 
     def _extra_stats(self, html: list):
         if self.skipped_dest:

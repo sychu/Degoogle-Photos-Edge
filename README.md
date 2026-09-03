@@ -37,8 +37,8 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 - Extracts the best date for each file (EXIF > JSON photoTakenTime > filename > JSON creationTime > parent dir year)
 - Deduplicates by MD5 hash + date (rounded to the minute)
 - Copies media files into `YYYY/MM/` folders, preserving JSON sidecars alongside
-  (`YYYY/unknown/` when only the year is known, `needs_review/` when nothing is)
-- Creates `Albums/` folder with relative symlinks for named albums
+  (`YYYY/unknown/` when only the year is known, `Needs Review/` when nothing is)
+- Creates `Google Albums/` folder with relative symlinks for named albums
 - Generates a multi-page HTML report with thumbnails, metadata tooltips, and Finder links
 
 **Dedup mode** (`--dedup-scan`):
@@ -51,7 +51,7 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 - Merges an unorganised backup (old drive, no Takeout/JSON structure) into an already-organised library
 - Skips any source file whose content (MD5) already exists in `--output`, so pre-existing photos are never re-copied or renamed with a `_2` suffix
 - Copies new files into the existing `YYYY/MM/` structure using the same date cascade and collision resolution as dedup mode
-- Creates `ImportedAlbums/<parent-dir>/` symlink aliases (no `by-folder/` mirror)
+- Creates `Imported Albums/<parent-dir>/` symlink aliases (no `by-folder/` mirror)
 
 ## Prerequisites
 
@@ -120,13 +120,14 @@ python3 -m degoogle_photos.cli --dedup-scan \
 output/
   2019/07/IMG_001.jpg        ← unique file, date-organised
   2020/03/VID_001.mp4
-  needs_review/IMG_nodate.jpg
+  Needs Review/IMG_nodate.jpg
   by-folder/                 ← original folder tree as symlinks
     vacation 2019/
       IMG_001.jpg  →  ../../2019/07/IMG_001.jpg
     birthday/
       VID_001.mp4  →  ../../2020/03/VID_001.mp4
-  report/index.html
+  Reports/
+    Dedup Reports/index.html
 ```
 
 **Output structure (multiple sources):** `by-folder/` is prefixed with each source folder's name so trees don't collide:
@@ -158,42 +159,43 @@ rsync -a --progress \
 
 ### Dedup-import mode
 
-Merge an old, unorganised backup into an existing degoogled library. Files already in the output (matched by content hash) are skipped, and directory-based aliases are written under `ImportedAlbums/` so they never collide with Google Photos albums.
+Merge an old, unorganised backup into an existing degoogled library. Files already in the output (matched by content hash) are skipped, and directory-based aliases are written under `Imported Albums/` so they never collide with Google Photos albums.
 
 ```bash
 # Preview — hashes the existing destination and reports what would be copied
 python3 -m degoogle_photos.cli --dedup-import --dry-run \
   --source "/path/to/old drive photos" \
-  --output "/path/to/DeGoogle-Edge Photos"
+  --output "/path/to/DeGoogle Photos"
 
 # Merge new files into the existing library
 python3 -m degoogle_photos.cli --dedup-import \
   --source "/path/to/old drive photos" \
-  --output "/path/to/DeGoogle-Edge Photos"
+  --output "/path/to/DeGoogle Photos"
 ```
 
 **Output structure:**
 ```
-DeGoogle-Edge Photos/
+DeGoogle Photos/
   2019/07/IMG_001.jpg                 ← already present, skipped by hash
   2020/03/VID_new.mp4                 ← newly copied from the old drive
-  needs_review/IMG_nodate.jpg
-  ImportedAlbums/                     ← aliases keyed by source parent dir
+  Needs Review/IMG_nodate.jpg
+  Imported Albums/                    ← aliases keyed by source parent dir
     vacation/
       VID_new.mp4  →  ../../2020/03/VID_new.mp4
-  report-import/
-    index.html                        ← listing of all import runs
-    import-<timestamp>/index.html     ← browsable report for one run
+  Reports/
+    Import Reports/
+      index.html                        ← listing of all import runs
+      import-<timestamp>/index.html     ← browsable report for one run
 ```
 
-The destination is scanned for existing files on every run (nothing is cached on disk), so reruns are safe and idempotent. New files whose name already exists in the output (different content) are renamed with a `_2`, `_3` suffix — existing files are never overwritten. Each import gets its own browsable report (date folders + album pages, same layout as the migration report) under `report-import/import-<timestamp>/`; `report-import/index.html` links all runs, and the migration report at `report/index.html` is never touched.
+The destination is scanned for existing files on every run (nothing is cached on disk), so reruns are safe and idempotent. New files whose name already exists in the output (different content) are renamed with a `_2`, `_3` suffix — existing files are never overwritten. Each import gets its own browsable report (date folders + album pages, same layout as the migration report) under `Reports/Import Reports/import-<timestamp>/`; `Reports/Import Reports/index.html` links all runs, and the migration report under `Reports/DeGoogle Reports/` is never touched.
 
 ### All options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--source PATH [PATH ...]` | current directory | One or more source folders. For migration: root containing Takeout dirs. For `--dedup-scan`: any folders to scan. |
-| `--output PATH` | `./DeGoogle-Edge Photos` | Destination for organised photos or dedup output |
+| `--output PATH` | `./DeGoogle Photos` | Destination for organised photos or dedup output |
 | `--dry-run` | off | Report what would be done without copying any files |
 | `--dedup-scan` | off | Dedup mode: scan any folder(s) instead of running a Takeout migration |
 | `--dedup-import` | off | Merge an unorganised backup into an existing organised library (mutually exclusive with `--dedup-scan`) |
@@ -207,7 +209,7 @@ The destination is scanned for existing files on every run (nothing is cached on
 3. **Date extraction** — Extract the best date using a priority cascade (EXIF > JSON > filename > parent dir year)
 4. **Deduplication** — Skip files with identical MD5 + date (within the same minute)
 5. **Copy** — Copy to `YYYY/MM/filename` with collision resolution (`_2`, `_3`, etc.)
-6. **Albums** — Create `Albums/<name>/` with relative symlinks to the copied files
+6. **Albums** — Create `Google Albums/<name>/` with relative symlinks to the copied files
 7. **Report** — Generate a browsable HTML report with per-folder and per-album pages
 
 ### Dedup mode
@@ -220,18 +222,18 @@ The destination is scanned for existing files on every run (nothing is cached on
 
 ## HTML Report
 
-Each mode writes to its own report directory so they never clobber each other:
+Each mode writes to its own directory under `Reports/` inside the output root so they never clobber each other:
 
 | Mode | Location |
 |------|----------|
-| Takeout migration (default) | `<output>/report/index.html` |
-| Dedup scan (`--dedup-scan`) | `<output>/report-dedup/index.html` |
-| Dedup import (`--dedup-import`) | `<output>/report-import/index.html` (listing; runs under `import-<timestamp>/`) |
+| Takeout migration (default) | `<output>/Reports/DeGoogle Reports/index.html` (listing; each run has its own `migration-<timestamp>/` page set) |
+| Dedup scan (`--dedup-scan`) | `<output>/Reports/Dedup Reports/index.html` |
+| Dedup import (`--dedup-import`) | `<output>/Reports/Import Reports/index.html` (listing; runs under `import-<timestamp>/`) |
 
 The migration report includes:
 
 - Dashboard with copy/duplicate/error counts and date-source breakdown
-- "Attention needed" section surfacing files in `needs_review/` and `YYYY/unknown/`
+- "Attention needed" section surfacing files in `Needs Review/` and `YYYY/unknown/`
 - Per-folder pages with image thumbnails in a responsive grid
 - Per-album pages for named albums (generic "Photos from YYYY" albums are excluded)
 - Hover tooltips showing EXIF data (camera, ISO, focal length, GPS) and JSON metadata (people, geo, description)
@@ -287,7 +289,7 @@ After running degoogle-photos, create an API key in the Immich web UI (Account S
 
 ```bash
 immich login http://localhost:2283 YOUR-API-KEY
-immich upload --recursive "/path/to/DeGoogle-Edge Photos"
+immich upload --recursive "/path/to/DeGoogle Photos"
 ```
 
 Immich will pick up the dates and folder structure automatically.

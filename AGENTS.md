@@ -16,7 +16,7 @@ Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into
   builds a global index, extracts the best date per file (EXIF > JSON `photoTakenTime` >
   filename > JSON `creationTime` > parent dir year), deduplicates by MD5 hash + date, copies
   media into `YYYY/MM/` folders (keeping JSON sidecars alongside, `YYYY/unknown/` when only
-  the year is known, `needs_review/` when nothing is), creates `Albums/`
+  the year is known, `Needs Review/` when nothing is), creates `Google Albums/`
   symlinks, and emits an HTML report. Reruns are resume-safe, including in-place
   renames of sniffed destinations from older output. Sidecar matching falls back from a file's own JSON to
   `-edited`/`(N)` variants, and Live Photo videos (MP4/MOV) inherit their same-stem still's
@@ -31,13 +31,18 @@ Degoogle-Photos is a Python CLI that organizes Google Takeout photo exports into
   (symlinks excluded) into an in-memory `existing_md5s` set, skips source files whose MD5
   matches, copies new files into `YYYY/MM/` (same date cascade/collisions as dedup mode —
   a same-named file with different content is renamed `_2`, never overwritten), and
-  creates directory-name aliases under a separate `ImportedAlbums/` root (no `by-folder/`).
+  creates directory-name aliases under a separate `Imported Albums/` root (no `by-folder/`).
   Reruns merge into an existing dated album dir with the same leaf name rather than
   creating a second dated dir.
 
-Reports are per-mode so they never clobber each other: migration → `report/`, dedup-scan →
-`report-dedup/`, dedup-import → `report-import/` (each import run gets a browsable
-`import-<timestamp>/` page set; `report-import/index.html` lists all runs newest-first).
+Reports live under a `Reports/` directory inside the output root and are per-mode so they
+never clobber each other: migration → `Reports/DeGoogle Reports/` (each run gets a browsable
+`migration-<timestamp>/` page set plus its own `migration_log.txt`; the root `index.html`
+lists all runs newest-first), dedup-scan → `Reports/Dedup Reports/`, dedup-import →
+`Reports/Import Reports/` (each import run gets a browsable `import-<timestamp>/` page set;
+`Reports/Import Reports/index.html` lists all runs newest-first). New names only — legacy
+`Albums/`, `needs_review/`, `report/`, `report-dedup/`, and `report-import/` dirs from older
+runs are left untouched and must be merged manually.
 
 The package is pure Python stdlib plus `Pillow`. Build/packaging is managed exclusively by
 `pyproject.toml`. There is a thin `migrate_photos.py` wrapper that delegates to
@@ -87,9 +92,11 @@ pytest -v tests/test_dedup_mode.py -k import_name
 - `sniff.py` — magic-byte detection for mislabeled `.heic`-as-video Live Photo parts.
 - `copy.py` — file copying with collision resolution and sidecar handling.
 - `albums.py` — album symlink creation.
-- `report.py` — HTML report generation. `HtmlReport` (migration, `report/`), `DedupReport`
-  (scan, `report-dedup/`), and `ImportReport(HtmlReport)` (import, `report-import/` with
-  per-run `import-<timestamp>/` pages + a run-listing index).
+- `report.py` — HTML report generation. `HtmlReport` (migration,
+  `Reports/DeGoogle Reports/` with per-run `migration-<timestamp>/` pages + a run-listing
+  index), `DedupReport` (scan, `Reports/Dedup Reports/`), and `ImportReport(HtmlReport)`
+  (import, `Reports/Import Reports/` with per-run `import-<timestamp>/` pages + a
+  run-listing index).
 - `logging_util.py` — migration logging and progress reporting.
 - `cli.py` — entry point orchestrating migration and dedup-scan; defines `MEDIA_EXTENSIONS`.
 

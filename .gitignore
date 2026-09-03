@@ -11,5 +11,5 @@ tests/__pycache__/*
 settings.local.json
 dist/*
 *.zip
-"DeGoogle-Edge Photos"
-"Deduped-Edge Photos"
+"DeGoogle Photos"
+"Deduped Photos"

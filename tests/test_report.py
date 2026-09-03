@@ -89,9 +89,10 @@ def test_write_creates_files(output_dir):
     report.add_copied(dest, Path("/src/photo.jpg"), datetime(2020, 5, 10), "exif", "Album1", True)
     report._write()
 
-    assert (output_dir / "report" / "index.html").exists()
-    assert (output_dir / "report" / "style.css").exists()
-    assert (output_dir / "report" / "folder_2020_05.html").exists()
+    report_dir = output_dir / "Reports" / "DeGoogle Reports"
+    assert (report_dir / "index.html").exists()
+    assert (report_dir / "style.css").exists()
+    assert (report_dir / "folder_2020_05.html").exists()
 
 
 def test_render_card_has_tooltip(output_dir):
@@ -129,15 +130,15 @@ def test_add_copied_parent_dir_folder_key(output_dir):
 
 def test_index_has_attention_section(output_dir):
     report = HtmlReport(output_dir, dry_run=True)
-    report.add_copied(Path("/out/needs_review/a.jpg"), Path("/src/a.jpg"),
+    report.add_copied(Path("/out/Needs Review/a.jpg"), Path("/src/a.jpg"),
                       None, "none", "Album", False)
     report.add_copied(Path("/out/2015/unknown/b.jpg"), Path("/src/b.jpg"),
                       datetime(2015, 1, 1), "parent_dir", "Album", False)
     report._write()
 
-    index = (output_dir / "report" / "index.html").read_text(encoding="utf-8")
+    index = (output_dir / "Reports" / "DeGoogle Reports" / "index.html").read_text(encoding="utf-8")
     assert "Attention Needed" in index
-    assert 'href="folder_needs_review.html"' in index
+    assert 'href="folder_Needs_Review.html"' in index
     assert 'href="folder_2015_unknown.html"' in index
     assert "No date found from any source" in index
     assert "Year known from parent folder, month unknown" in index
@@ -159,3 +160,50 @@ def test_render_card_video(output_dir):
     html = report._render_card(entry)
     assert ".MP4" in html
     assert "vid-thumb" in html
+
+
+def _run_migration_report(output_dir, dest_name, dt):
+    """One migration report run: begin_run → _write → finish_run."""
+    report = HtmlReport(output_dir, dry_run=False)
+    report.total = 1
+    if dt is None:
+        dest = Path(f"/out/Needs Review/{dest_name}")
+    else:
+        dest = Path(f"/out/{dt:%Y/%m}/{dest_name}")
+    report.add_copied(dest, Path(f"/src/{dest_name}"), dt, "exif", "Album", False)
+    report.begin_run()
+    report._write()
+    report.finish_run()
+    return report
+
+
+def test_migration_runs_are_separate_and_listed(output_dir):
+    _run_migration_report(output_dir, "a.jpg", datetime(2020, 5, 10))
+    _run_migration_report(output_dir, "b.jpg", datetime(2020, 6, 11))
+
+    root = output_dir / "Reports" / "DeGoogle Reports"
+    run_dirs = sorted(d.name for d in root.iterdir()
+                      if d.is_dir() and d.name.startswith("migration-"))
+    assert len(run_dirs) == 2
+    # Each run keeps its own browsable dashboard.
+    for d in run_dirs:
+        assert (root / d / "index.html").exists()
+    # The root index lists both runs, newest first, with an open link.
+    listing = (root / "index.html").read_text(encoding="utf-8")
+    assert "Migration Reports" in listing
+    assert "Open report" in listing
+    assert listing.index(f"{run_dirs[-1]}/index.html") < listing.index(f"{run_dirs[0]}/index.html")
+
+
+def test_folder_slug_spaces(output_dir):
+    report = _run_migration_report(output_dir, "a.jpg", None)
+
+    assert "Needs Review" in report.files_by_folder
+    root = output_dir / "Reports" / "DeGoogle Reports"
+    run_dirs = [d for d in root.iterdir()
+                if d.is_dir() and d.name.startswith("migration-")]
+    assert len(run_dirs) == 1
+    run_index = (run_dirs[0] / "index.html").read_text(encoding="utf-8")
+    # Spaces become underscores in page names (folder_Needs_Review.html).
+    assert 'href="folder_Needs_Review.html"' in run_index
+    assert (run_dirs[0] / "folder_Needs_Review.html").exists()

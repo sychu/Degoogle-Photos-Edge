@@ -110,7 +110,11 @@ class MigrationLog:
 
         if not self.dry_run:
             self.output_root.mkdir(parents=True, exist_ok=True)
-            log_path = self.output_root / "migration_log.txt"
+            # The per-run log lives next to the run's report pages so history
+            # across multiple migration runs is preserved.
+            log_dir = self.html.run_dir or self.html.report_root
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "migration_log.txt"
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write(summary)
                 f.write("\nDetailed Log:\n")
@@ -119,7 +123,7 @@ class MigrationLog:
             print(f"Log written to: {log_path}")
 
             if self._review_lines:
-                review_dir = self.output_root / "needs_review"
+                review_dir = self.output_root / "Needs Review"
                 review_dir.mkdir(parents=True, exist_ok=True)
                 readme = review_dir / "README.txt"
                 with open(readme, "w", encoding="utf-8") as f:

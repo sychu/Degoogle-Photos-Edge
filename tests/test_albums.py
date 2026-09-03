@@ -34,7 +34,7 @@ def test_create_symlinks(tmp_path):
 
     create_album_symlinks(output_root, album_files, dry_run=False, log=log)
 
-    link = output_root / "Albums" / "My Vacation" / "photo.jpg"
+    link = output_root / "Google Albums" / "My Vacation" / "photo.jpg"
     assert link.is_symlink()
     assert link.resolve() == dest_file.resolve()
 
@@ -52,7 +52,7 @@ def test_skips_generic_albums(tmp_path):
     log = _make_mock_log()
 
     create_album_symlinks(output_root, album_files, dry_run=False, log=log)
-    assert not (output_root / "Albums").exists()
+    assert not (output_root / "Google Albums").exists()
 
 
 def test_handles_existing_symlinks(tmp_path):
@@ -65,7 +65,7 @@ def test_handles_existing_symlinks(tmp_path):
     dest_file.write_bytes(b"jpeg")
 
     # Pre-create the symlink
-    album_dir = output_root / "Albums" / "Trip"
+    album_dir = output_root / "Google Albums" / "Trip"
     album_dir.mkdir(parents=True)
     link = album_dir / "photo.jpg"
     link.symlink_to(os.path.relpath(dest_file, album_dir))
@@ -101,7 +101,7 @@ def _make_alias_album(tmp_path, album_name, entries):
 
     log = _make_mock_log()
     create_album_symlinks(output_root, {album_name: dest_paths}, dry_run=False, log=log)
-    return output_root / "Albums"
+    return output_root / "Google Albums"
 
 
 def test_date_prefixed_album(tmp_path):
@@ -174,7 +174,7 @@ def test_legacy_unprefixed_folder_removed(tmp_path):
     dest_file = dest_dir / "photo.jpg"
     dest_file.write_bytes(b"jpeg")
 
-    legacy_dir = output_root / "Albums" / "Trip"
+    legacy_dir = output_root / "Google Albums" / "Trip"
     legacy_dir.mkdir(parents=True)
     (legacy_dir / "photo.jpg").symlink_to(os.path.relpath(dest_file, legacy_dir))
 
@@ -185,7 +185,7 @@ def test_legacy_unprefixed_folder_removed(tmp_path):
     )
 
     assert not legacy_dir.exists()
-    new_dir = output_root / "Albums" / "2020-05-11 Trip"
+    new_dir = output_root / "Google Albums" / "2020-05-11 Trip"
     assert new_dir.is_dir()
     assert (new_dir / "photo.jpg").is_symlink()
 
@@ -198,7 +198,7 @@ def test_legacy_folder_with_real_files_left_in_place(tmp_path):
     dest_file = dest_dir / "photo.jpg"
     dest_file.write_bytes(b"jpeg")
 
-    legacy_dir = output_root / "Albums" / "Trip"
+    legacy_dir = output_root / "Google Albums" / "Trip"
     legacy_dir.mkdir(parents=True)
     real_file = legacy_dir / "real.jpg"
     real_file.write_bytes(b"real")
@@ -211,4 +211,4 @@ def test_legacy_folder_with_real_files_left_in_place(tmp_path):
 
     assert legacy_dir.is_dir()
     assert real_file.is_file()
-    assert (output_root / "Albums" / "2020-05-11 Trip" / "photo.jpg").is_symlink()
+    assert (output_root / "Google Albums" / "2020-05-11 Trip" / "photo.jpg").is_symlink()

@@ -22,14 +22,12 @@ def make_args(source, output, dry_run=False):
 
 
 def media_files_in_output(output: Path):
-    """All files under output, excluding by-folder/ and report*/ subtrees."""
+    """All files under output, excluding by-folder/ and Reports/ subtrees."""
     return [
         p for p in output.rglob("*")
         if p.is_file()
         and "by-folder" not in p.parts
-        and "report" not in p.parts
-        and "report-dedup" not in p.parts
-        and "report-import" not in p.parts
+        and "Reports" not in p.parts
     ]
 
 
@@ -92,11 +90,11 @@ def test_duplicate_is_not_copied(source, output):
 def test_files_go_into_date_folders(source, output):
     _run_dedup(make_args(source, output))
     copied = media_files_in_output(output)
-    # Every file should live under a YYYY/MM/ or needs_review/ subfolder
+    # Every file should live under a YYYY/MM/ or Needs Review/ subfolder
     for f in copied:
         rel = f.relative_to(output)
         top = rel.parts[0]
-        assert top.isdigit() or top == "needs_review", (
+        assert top.isdigit() or top == "Needs Review", (
             f"Unexpected top-level folder '{top}' for {f}"
         )
 
@@ -301,13 +299,13 @@ def test_no_date_file_goes_to_needs_review(tmp_path):
     src = tmp_path / "source"
     src.mkdir()
     # Filename has no date pattern, no EXIF, and the parent folder has no year,
-    # so extraction yields (None, "none") -> needs_review/.
+    # so extraction yields (None, "none") -> Needs Review/.
     (src / "no_date_in_name.jpg").write_bytes(b"nodatecontent")
     out = tmp_path / "output"
     _run_dedup(make_args(src, out))
     copied = media_files_in_output(out)
     assert len(copied) == 1
-    assert (out / "needs_review" / "no_date_in_name.jpg").exists()
+    assert (out / "Needs Review" / "no_date_in_name.jpg").exists()
 
 
 def test_parent_dir_year_file_goes_to_unknown(tmp_path):
