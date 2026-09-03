@@ -61,6 +61,9 @@ class HtmlReport:
         self.date_source_counts = defaultdict(int)  # type: dict[str, int]
         self.total = 0
         self.processed = 0
+        self.copied = 0
+        self.skipped_resume = 0
+        self.needs_review = 0
         self._dirty = False
         # Track which folders/albums changed since last write
         self._dirty_folders = set()
@@ -68,7 +71,7 @@ class HtmlReport:
 
     def add_copied(self, dest_path: Path, source_path: Path, dt: Optional[datetime],
                    date_source: str, album: str, had_json: bool,
-                   metadata: Optional[dict] = None):
+                   metadata: Optional[dict] = None, status: str = "copied"):
         is_raw = is_raw_file(dest_path.name)
         if not dt:
             folder = "Raw/Needs Review" if is_raw else "Needs Review"
@@ -91,6 +94,12 @@ class HtmlReport:
         }
         self.files_by_folder[folder].append(entry)
         self.date_source_counts[date_source] += 1
+        if status == "resumed":
+            self.skipped_resume += 1
+        elif status == "review":
+            self.needs_review += 1
+        else:
+            self.copied += 1
         self._dirty = True
         self._dirty_folders.add(folder)
         # Track album membership (skip generic "Photos from YYYY" albums)
@@ -185,7 +194,7 @@ class HtmlReport:
         """Hook for subclasses: append extra sections before the footer."""
 
     def _write_index(self):
-        total_copied = sum(len(v) for v in self.files_by_folder.values())
+        total_copied = self.copied
         total_dupes = len(self.duplicates)
         total_errors = len(self.errors)
 
@@ -199,13 +208,14 @@ class HtmlReport:
 
         # Stats
         html.append('<section class="summary"><h2>Summary</h2><div class="stat-grid">')
+        html.append(f'<div class="stat"><span class="num">{self.total}</span><span class="label">Total media files</span></div>')
         html.append(f'<div class="stat"><span class="num">{total_copied}</span><span class="label">Copied</span></div>')
         html.append(f'<div class="stat"><span class="num">{total_dupes}</span><span class="label">Duplicates skipped</span></div>')
-        html.append(f'<div class="stat"><span class="num">{total_errors}</span><span class="label">Errors</span></div>')
-        nr = len(self.files_by_folder.get("Needs Review", []))
-        if nr > 0:
+        if self.skipped_resume:
+            html.append(f'<div class="stat"><span class="num">{self.skipped_resume}</span><span class="label">Skipped (already copied)</span></div>')
+        if self.needs_review:
             nr_slug = self._folder_slug("Needs Review")
-            html.append(f'<div class="stat"><span class="num"><a href="folder_{nr_slug}.html">{nr}</a></span>'
+            html.append(f'<div class="stat"><span class="num"><a href="folder_{nr_slug}.html">{self.needs_review}</a></span>'
                         f'<span class="label">Needs review</span></div>')
         unknown_folders = sorted(f for f in self.files_by_folder if f.endswith("/unknown"))
         unknown_total = sum(len(self.files_by_folder[f]) for f in unknown_folders)
@@ -217,6 +227,7 @@ class HtmlReport:
         if raw_total > 0:
             html.append(f'<div class="stat"><span class="num"><a href="#raw-files">{raw_total}</a></span>'
                         f'<span class="label">RAW files</span></div>')
+        html.append(f'<div class="stat"><span class="num">{total_errors}</span><span class="label">Errors</span></div>')
         self._extra_stats(html)
         html.append('</div>')
 
@@ -238,6 +249,7 @@ class HtmlReport:
         html.append('</table></section>')
 
         # Attention needed section (only when such folders are non-empty)
+        nr = len(self.files_by_folder.get("Needs Review", []))
         raw_nr = len(self.files_by_folder.get("Raw/Needs Review", []))
         if nr > 0 or raw_nr > 0 or unknown_folders:
             html.append('<section class="attention" id="attention-needed"><h2>Attention Needed</h2>')
@@ -258,14 +270,13 @@ class HtmlReport:
 
         # RAW Files section (only when at least one RAW file was spotted)
         if raw_total > 0:
-            html.append('<section id="raw-files"><h2>RAW Files</h2>')
+            html.append('<section class="nav-section" id="raw-files"><h2>RAW Files</h2><div class="folder-nav">')
             for folder in raw_folders:
                 count = len(self.files_by_folder[folder])
                 slug = self._folder_slug(folder)
                 css = ' class="review"' if folder == "Raw/Needs Review" or folder.endswith("/unknown") else ""
-                html.append(f'<p><a href="folder_{slug}.html"{css}>{folder}</a> &mdash; '
-                            f'{count} files</p>')
-            html.append('</section>')
+                html.append(f'<a href="folder_{slug}.html"{css}>{folder} ({count})</a>')
+            html.append('</div></section>')
 
         # Album navigation
         if self.files_by_album:

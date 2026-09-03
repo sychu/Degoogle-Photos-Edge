@@ -480,7 +480,8 @@ def main():
                 log.skipped_resume += 1
                 log.log(f"SKIP_RESUME: {media_path} -> {dest_path}")
                 log.html.add_copied(dest_path, media_path, dt, date_source,
-                                    album_name, json_path is not None, metadata)
+                                    album_name, json_path is not None, metadata,
+                                    status="resumed")
                 album_files[album_name].append((dest_path, prefix_dt))
                 log.progress(i, log.total)
                 continue
@@ -505,12 +506,14 @@ def main():
                     actual_dest = copy_with_sidecar(media_path, json_path, dest_path, dry_run)
                     log.log(f"REVIEW: {media_path} -> {actual_dest}")
                     log.html.add_copied(actual_dest, media_path, dt, date_source,
-                                        album_name, json_path is not None, metadata)
+                                        album_name, json_path is not None, metadata,
+                                        status="review")
                     album_files[album_name].append((actual_dest, prefix_dt))
                 else:
                     log.log(f"REVIEW: {media_path} -> {dest_path}")
                     log.html.add_copied(dest_path, media_path, dt, date_source,
-                                        album_name, json_path is not None, metadata)
+                                        album_name, json_path is not None, metadata,
+                                        status="review")
                     album_files[album_name].append((dest_path, prefix_dt))
             else:
                 # Normal copy
