@@ -57,6 +57,11 @@ You'll end up with something like `Takeout/`, `Takeout-2/`, `Takeout-3/`, ... ea
 
 - Python 3.9+
 - A Google Takeout export (see above)
+- Optional: the `exiftool` binary (>= 12.15) on PATH — enables embedded-date and
+  metadata extraction for videos, RAW files, and other formats Pillow cannot read
+  (Ubuntu: `sudo apt install libimage-exiftool-perl`; otherwise see
+  [exiftool.org](https://exiftool.org)). Without it, those files simply fall back
+  to JSON-sidecar / filename / folder-name dates.
 
 ## Installation
 
@@ -68,7 +73,7 @@ cd Degoogle-Photos-Edge
 pip install .
 ```
 
-That's it. Pillow (for EXIF extraction) is installed automatically. The `degoogle-photos` command is then available on your PATH.
+That's it. Pillow (for EXIF extraction) and pyexiftool are installed automatically. If the optional `exiftool` binary is present, videos/RAW files get their embedded dates extracted too (see Prerequisites). The `degoogle-photos` command is then available on your PATH.
 
 You can also run it straight from the clone without installing, using the module entry point:
 

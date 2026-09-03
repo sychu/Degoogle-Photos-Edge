@@ -44,9 +44,12 @@ lists all runs newest-first), dedup-scan → `Reports/Dedup Reports/`, dedup-imp
 `Albums/`, `needs_review/`, `report/`, `report-dedup/`, and `report-import/` dirs from older
 runs are left untouched and must be merged manually.
 
-The package is pure Python stdlib plus `Pillow`. Build/packaging is managed exclusively by
-`pyproject.toml`. There is a thin `migrate_photos.py` wrapper that delegates to
-`degoogle_photos.cli:main` for backwards compatibility.
+The package is pure Python stdlib plus `Pillow` and `pyexiftool`. pyexiftool drives
+the `exiftool` system binary (>= 12.15, optional — absent binary degrades gracefully
+to sidecar/filename/parent-dir dates) in `-stay_open` batch mode as a date/metadata
+fallback for formats Pillow cannot read (videos, RAW, HEIC). Build/packaging is
+managed exclusively by `pyproject.toml`. There is a thin `migrate_photos.py` wrapper
+that delegates to `degoogle_photos.cli:main` for backwards compatibility.
 
 ## Repository layout
 
